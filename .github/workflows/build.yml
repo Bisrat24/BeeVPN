@@ -20,14 +20,13 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Android NDK r17c
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r17c
-          link-to-sdk: true
+      - name: Accept Licenses & Install Android NDK 17c
+        run: |
+          SDKMANAGER=$(find $ANDROID_HOME/cmdline-tools -name sdkmanager | head -n 1)
+          echo "Using sdkmanager at: $SDKMANAGER"
+          yes | $SDKMANAGER --licenses || true
+          yes | $SDKMANAGER "ndk;17.2.4988734"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/17.2.4988734" >> $GITHUB_ENV
 
       - name: Make Gradlew Executable
         run: chmod +x ./gradlew
