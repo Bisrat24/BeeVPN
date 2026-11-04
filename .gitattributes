@@ -1,0 +1,2 @@
+# Standard gitattributes without LFS restrictions
+* text=auto

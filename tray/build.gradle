@@ -1,0 +1,54 @@
+apply plugin: 'com.android.library'
+apply plugin: 'jacoco'
+
+def final String VERSION_NAME = "0.10.0"
+def final int VERSION_CODE = 10
+
+android {
+    namespace 'net.grandcentrix.tray'
+    testNamespace 'net.grandcentrix.tray.test'
+
+    defaultConfig {
+        compileSdk 26
+        minSdkVersion 14
+        targetSdkVersion 26
+        versionCode VERSION_CODE
+        versionName VERSION_NAME
+
+        resValue "string", "tray__authority", "com.example.preferences"
+    }
+
+    buildTypes {
+        debug {
+            // output coverage with ./gradlew clean build createDebugCoverageReport
+            testCoverageEnabled true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+
+    adbOptions {
+        timeOutInMs 300000
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+}
+
+dependencies {
+    implementation 'androidx.annotation:annotation:1.0.0'
+
+    androidTestImplementation 'com.google.dexmaker:dexmaker-mockito:1.2'
+    androidTestImplementation 'com.google.dexmaker:dexmaker:1.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.1'
+    testImplementation 'org.mockito:mockito-core:1.9.5'
+    testImplementation 'junit:junit:4.12'
+}

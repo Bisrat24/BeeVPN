@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:installLocation="auto">
+    <uses-sdk tools:overrideLibrary="ca.psiphon"></uses-sdk>
+
+    <supports-screens
+                  android:smallScreens="true"
+                  android:normalScreens="true"
+                  android:largeScreens="true"
+                  android:xlargeScreens="true" />
+    <!--Apps targeting Android 13 (SDK 33) and above are required to declare POST_NOTIFICATIONS permission -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <!-- required for targetSdk 30+ to show all apps in the VPN exclusions dialog -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- instruct manifest merger to remove fine location permissions from the final manifest -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" tools:node="remove"/>
+    <!-- instruct manifest merger to remove any external storage permissions from the final manifest -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <uses-permission android:name="android.permission.NFC" />
+    <uses-feature android:name="android.hardware.nfc.hce" android:required="false"/>
+    <uses-feature android:name="android.hardware.nfc" android:required="false"/>
+
+    <application
+        android:name=".PsiphonApplication"
+        android:hardwareAccelerated="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.Psiphon"
+        android:supportsRtl="true"
+        android:label="@string/app_name"
+        android:usesCleartextTraffic="false"
+        tools:ignore="GoogleAppIndexingWarning"
+        tools:replace="android:fullBackupContent">
+
+        <activity
+            android:name=".MainActivity"
+            android:label="@string/app_name"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <!-- Accepts URIs in the form of "psiphon://settings” -->
+                <data
+                    android:scheme="psiphon"
+                    android:host="settings" />
+            </intent-filter>
+            <!-- Accepts URIs in the form of "psiphon://pair” -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="psiphon"
+                    android:host="pair" />
+            </intent-filter>
+        </activity>
+        <activity-alias
+            android:name="com.psiphon3.psiphonlibrary.TunnelIntentsHandler"
+            android:exported="false"
+            android:targetActivity="com.psiphon3.MainActivity" />
+        <activity
+            android:name=".FeedbackActivity"
+            android:parentActivityName=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".MainActivity" />
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <!-- Accepts URIs that begin with "psiphon://feedback” -->
+                <data
+                    android:scheme="psiphon"
+                    android:host="feedback" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".psiphonlibrary.MoreOptionsPreferenceActivity"
+            android:parentActivityName=".MainActivity"
+            android:label="@string/app_name">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".MainActivity" />
+        </activity>
+        <activity
+            android:name=".psiphonlibrary.VpnOptionsPreferenceActivity"
+            android:parentActivityName=".MainActivity"
+            android:label="@string/app_name">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".MainActivity" />
+        </activity>
+        <activity
+            android:name=".psiphonlibrary.ProxyOptionsPreferenceActivity"
+            android:parentActivityName=".MainActivity"
+            android:label="@string/app_name">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".MainActivity" />
+        </activity>
+        <activity
+            android:name=".psiphonlibrary.PersonalPairingPreferenceActivity"
+            android:parentActivityName=".MainActivity"
+            android:label="@string/app_name">
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".MainActivity" />
+        </activity>
+        <activity android:theme="@style/Theme.DialogAlert"
+            android:excludeFromRecents="true"
+            android:name=".NotificationPermissionRationaleActivity" />
+        <activity android:theme="@style/Theme.DialogAlert"
+            android:excludeFromRecents="true"
+            android:name=".LocationPermissionRationaleActivity" />
+        <activity android:theme="@style/Theme.DialogAlert"
+            android:name=".PsiphonBumpNfcReaderActivity" >
+        </activity>
+        <activity
+            android:name=".PsiphonBumpHelpActivity" />
+        <service
+            android:name=".psiphonlibrary.TunnelVpnService"
+            android:foregroundServiceType="specialUse"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false"
+            android:process=":TunnelVpnService" >
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="vpn" />
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
+                android:value="true" />
+        </service>
+        <!-- HCE service for Psiphon Bump -->
+        <service
+            android:name=".PsiphonHostApduService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
+            <meta-data android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/apduservice"/>
+        </service>
+        <provider
+            android:name=".log.LoggingContentProvider"
+            android:exported="false"
+            android:process=":LoggingContentProvider"
+            android:authorities="${applicationId}.LoggingContentProvider" />
+        <!-- PsiphonUpdateReceiver receives intents that trigger upgrade checking. -->
+        <receiver android:name=".PsiphonUpdateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- UpgradeChecker receives intents (direct, alarm, boot) that trigger upgrade checking. -->
+        <receiver
+            android:name=".psiphonlibrary.UpgradeChecker"
+            android:process=":UpgradeChecker"
+            android:exported="false"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <!-- The service that UpgradeChecker uses to do work -->
+        <service
+            android:name=".psiphonlibrary.UpgradeChecker$UpgradeCheckerService"
+            android:label="@string/upgrade_checker_service_name"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:process=":UpgradeChecker" >
+        </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.UpgradeFileProvider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/provider_paths"/>
+        </provider>
+    </application>
+
+</manifest>

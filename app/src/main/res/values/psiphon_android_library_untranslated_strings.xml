@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="UpgradeManager.UpgradeAvailableNotificationId">Psiphon Upgrade Available Notification</string>
+    <string name="preferencesNotifications">preferencesNotifications</string>
+    <string name="preferenceNotificationsWithSound">preferenceNotificationsWithSoundDefaultOff</string>
+    <string name="preferenceNotificationsWithVibrate">preferenceNotificationsWithVibrateDefaultOff</string>
+    <string name="preferencesLanguage">preferencesLanguage</string>
+    <string name="preferenceLanguageSelection">preferenceLanguageSelection</string>
+    <string name="preferenceNavigateToVPNSetting">preferenceNavigateToVPNSetting</string>
+    <string name="vpnSettingsCategoryKey">vpnSettingsCategoryKey</string>
+    <string name="preferenceIncludeAllAppsInVpn" translatable="false">preferenceIncludeAllAppsInVpn</string>
+    <string name="preferenceIncludeAppsInVpn" translatable="false">preferenceIncludeAppsInVpn</string>
+    <string name="preferenceIncludeAppsInVpnString" translatable="false">preferenceIncludeAppsInVpnString</string>
+    <string name="preferenceExcludeAppsFromVpn" translatable="false">preferenceExcludeAppsFromVpn</string>
+    <string name="preferenceExcludeAppsFromVpnString" translatable="false">preferenceExcludeAppsFromVpnString</string>
+    <string name="preferenceSelectApps" translatable="false">preferenceSelectApps</string>
+    <string name="preferenceDefaultExclusionsFooter" translatable="false">preferenceDefaultExclusionsFooter</string>
+    <string name="preferenceAbout" translatable="false">preferenceAbout</string>
+    <string name="preferenceAboutMalAware" translatable="false">preferenceAboutMalAware</string>
+    <string name="AboutMalAwareLink" translatable="false">https://s3.amazonaws.com/psiphon/web/malaware.io/index.html</string>
+    <!-- backwards compatible shared preferences names for new 'More Options' screen with proxy settings  -->
+    <string name="proxySettingsCategoryKey">proxySettingsCategoryKey</string>
+    <string name="useProxySettingsPreference">useProxySettingsPreference</string>
+    <string name="useSystemProxySettingsPreference">useSystemProxySettingsPreference</string>
+    <string name="useCustomProxySettingsPreference">useCustomProxySettingsPreference</string>
+    <string name="useCustomProxySettingsHostPreference">useCustomProxySettingsHostPreference</string>
+    <string name="useCustomProxySettingsPortPreference">useCustomProxySettingsPortPreference</string>
+    <string name="useProxyAuthenticationPreference">useProxyAuthenticationPreference</string>
+    <string name="useProxyUsernamePreference">useProxyUsernamePreference</string>
+    <string name="useProxyPasswordPreference">useProxyPasswordPreference</string>
+    <string name="useProxyDomainPreference">useProxyDomainPreference</string>
+    <string name="downloadWifiOnlyPreference">downloadWifiOnlyPreference</string>
+    <string name="disableTimeoutsPreference">disableTimeoutsPreference</string>
+    <string name="unsafeTrafficAlertsPreference" translatable="false">unsafeTrafficAlertsPreference</string>
+    <string name="egressRegionPreference">egressRegionPreference</string>
+    <string name="moreOptionsPreferencesName">moreOptionsPreferencesName</string>
+    <string name="nfcBumpPreference" translatable="false">nfcBumpPreference</string>
+
+    <string name="upgrade_checker_service_name">Psiphon:UpgradeChecker</string>
+
+    <string name="current_local_http_proxy_port">currentLocalHttpProxyPort</string>
+    <string name="proxyOptionsPreferenceKey" translatable="false">proxyOptionsPreferenceKey</string>
+    <string name="vpnOptionsPreferenceKey" translatable="false">vpnOptionsPreferenceKey</string>
+    <string name="feedbackPreferenceKey" translatable="false">feedbackPreferenceKey</string>
+    <string name="moreOptionsPreferenceKey" translatable="false">moreOptionsPreferenceKey</string>
+    <string name="regionPreferenceKey" translatable="false">regionPreferenceKey</string>
+    <string name="alert_notification_group" translatable="false">alert_notification_group</string>
+    <string name="upgrade_notification_group" translatable="false">upgrade_notification_group</string>
+    <string name="status_notification_group" translatable="false">status_notification_group</string>
+    <string name="vpnServiceDataCollectionDisclosureAccepted" translatable="false">vpnServiceDataCollectionDisclosureAccepted</string>
+    <string name="deviceLocationPrecisionParameter" translatable="false">deviceLocationPrecision</string>
+    <string name="serviceRunningPreference" translatable="false">serviceRunningPreference</string>
+    <string name="personalPairingPreferenceKey" translatable="false">personalPairingPreferenceKey</string>
+    <string name="personalPairingEnabledPreference" translatable="false">personalPairingEnabledPreference</string>
+    <string name="personalPairingImportPreference" translatable="false">personalPairingImportPreference</string>
+    <string name="personalPairingCompartmentIdPreference" translatable="false">personalPairingCompartmentIdPreference</string>
+    <string name="personalPairingAliasPreference" translatable="false">personalPairingAliasPreference</string>
+    <string name="personalPairingResetPreference" translatable="false">personalPairingResetPreference</string>
+
+    <string-array name="languages">
+        <item>English,en</item>
+        <item>فارسی,fa</item>
+        <item>العربية,ar</item>
+        <item>简体中文,zh</item>
+        <item>繁体中文,zh-rTW</item>
+        <item>አማርኛ,am</item>
+        <item>azərbaycan dili,az</item>
+        <item>Беларуская,be</item>
+        <item>বাংলা,bn</item>
+        <item>བོད་ཡིག,bo</item>
+        <item>Deutsch,de</item>
+        <item>Ελληνικά,el</item>
+        <item>Español,es</item>
+        <item>فارسی دری,fa-rAF</item>
+        <item>Suomi,fi</item>
+        <item>Français,fr</item>
+        <item>Hausa,ha</item>
+        <item>हिन्दी,hi</item>
+        <item>Hrvatski,hr</item>
+        <item>Bahasa Indonesia,id</item>
+        <item>Italiano,it</item>
+        <item>қазақ тілі,kk</item>
+        <item>ភាសាខ្មែរ,km</item>
+        <item>ಕನ್ನಡ,kn</item>
+        <item>한국어,ko</item>
+        <item>Кыргызча,ky</item>
+        <item>മലയാളം,ml</item>
+        <item>मराठी,mr</item>
+        <item>Bahasa Melayu,ms</item>
+        <item>မြန်မာဘာသာ,my</item>
+        <item>Norsk bokmål,nb</item>
+        <item>Nederlands,nl</item>
+        <item>Afaan Oromo,om</item>
+        <item>Português (Portugal),pt</item>
+        <item>Português (Brasil),pt-rBR</item>
+        <item>Русский,ru</item>
+        <item>chiShona,sn</item>
+        <item>Kiswahili,sw</item>
+        <item>Тоҷикӣ,tg</item>
+        <item>ภาษาไทย,th</item>
+        <item>ትግርኛ,ti</item>
+        <item>Türkmençe,tk</item>
+        <item>Türkçe,tr</item>
+        <item>Українська,uk</item>
+        <item>اردو,ur</item>
+        <item>Oʻzbekcha,uz</item>
+        <item>Tiếng Việt,vi</item>
+    </string-array>
+</resources>

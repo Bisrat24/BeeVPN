@@ -1,0 +1,311 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="banner_desc">sponsor banner; click to visit sponsor home page</string>
+    <string name="open_browser">Open Browser</string>
+    <string name="FeedbackActivity.DefaultText">If you have any specific comments, further information about web sites that do not work, or if this form is not working for you, please email &lt;a href=&quot;mailto:feedback@psiphon.ca&quot;&gt;feedback@psiphon.ca&lt;/a&gt;.</string>
+    <string name="FeedbackActivity.Success">Thank you for submitting your feedback</string>
+    <string name="FeedbackActivity.Failure">Submission failed.  Please try again.</string>
+    <string name="StatusActivity.VpnRevokedTitle">Psiphon VPN has stopped</string>
+    <string name="StatusActivity.VpnRevokedMessage">Psiphon\'s VPN has been disconnected by you or by another app. Multiple VPN apps cannot be running at the same time. Check if another VPN app is installed and is running.</string>
+    <string name="StatusActivity.VpnPromptCancelledTitle">Psiphon VPN cannot start</string>
+    <string name="StatusActivity.VpnPromptCancelledMessage">Psiphon cannot start the VPN. Multiple VPN apps cannot be running at the same time. Check if another VPN app is installed and is set to Always-on.</string>
+    <string name="selected_region_currently_not_available">Selected region is currently not available, please select another region.</string>
+    <string name="ads_consent_preference_category_title">Advertising personalization</string>
+    <string name="ads_consent_preference_dialog_preference_message">Do you really want to reset your ads personalization preference?</string>
+    <string name="ads_consent_preference_title">Reset ads personalization preference</string>
+    <string name="ads_consent_preference_dialog_title">Reset</string>
+    <string name="ads_consent_preference_summary">Reset your preference to allow ad networks to use cookies and your personal data</string>
+    <string name="preference_language_selection_summary">Select the language</string>
+    <string name="preference_language_selection_title">Language</string>
+    <string name="preference_language_title">Language Selection</string>
+    <string name="preference_language_default_language">Default language</string>
+    <string name="preference_category_advanced_title">Advanced</string>
+    <string name="preference_category_info_title">Information</string>
+    <!-- Generic string to say OK or acknowledge -->
+    <string name="label_ok">OK</string>
+    <string name="preference_navigate_to_vpn_setting_title">Always-on VPN</string>
+    <string name="preference_navigate_to_vpn_setting_summary">Go to system settings to enable Always-on VPN</string>
+
+    <!-- Generic negative button label.-->
+    <string name="lbl_no">No</string>
+
+    <!-- Generic positive button label.-->
+    <string name="lbl_yes">Yes</string>
+
+    <!-- "Please open Psiphon to keep connecting" notification title -->
+    <string name="notification_title_action_required">Action required!</string>
+    <!-- Message shown in notification informing the user that Psiphon application needs to be open in order to finish connection sequence. Clicking this notification also opens the app. -->
+    <string name="notification_text_open_psiphon_to_finish_connecting">Please open Psiphon to finish connecting.</string>
+    <!-- "Selected region is not available" notification title -->
+    <string name="notification_title_region_not_available">Selected region is not available</string>
+    <!-- Message shown in notification informing the user that selected region is not currently available -->
+    <string name="notification_text_region_not_available">Please open Psiphon and select another region.</string>
+    <!-- "VPN stopped" notification title -->
+    <string name="notification_title_vpn_revoked">Psiphon VPN has stopped</string>
+    <!-- Message shown in notification informing the user that VPN has been disconnected by another app or revoked by the user -->
+    <string name="notification_text_vpn_revoked">Psiphon VPN has been disconnected by you or by another app.</string>
+    <!-- Description for an app icon image -->
+    <string name="description_app_icon">App Icon</string>
+    <string name="bad_vpn_exclusion_setting_alert_title">Invalid VPN setting</string>
+    <string name="bad_vpn_exclusion_whitelist_alert_message">You need to have at least one app selected in this mode!</string>
+    <string name="bad_vpn_exclusion_blacklist_alert_message">You need to have at least one app unselected in this mode!</string>
+    <string name="vpn_exclusions_preference_not_available_summary">Requires Android 5.0 or greater</string>
+    <string name="vpn_always_on_preference_not_available_summary">Requires Android 7.0 or greater</string>
+    <string name="vpn_exclusions_tip_summary">Select only one browser for classic browser-only mode</string>
+    <!-- Title of the toolbar notification which is shown to the user when Psiphon server detects an unsafe Internet traffic -->
+    <string name="unsafe_traffic_alert_notification_title">Psiphon MalAware</string>
+    <!-- Content of the toolbar notification which is shown to the user when Psiphon server detects an unsafe Internet traffic -->
+    <string name="unsafe_traffic_alert_notification_message">Malware traffic detected! Click to learn more.</string>
+    <!-- Title of the alert dialog which is shown to the user when they click toolbar notification of unsafe Internet traffic -->
+    <string name="unsafe_traffic_alert_dialog_title">Psiphon MalAware</string>
+    <!-- Content of the alert dialog which is shown to the user when they click toolbar notification of unsafe Internet traffic -->
+    <string name="unsafe_traffic_alert_dialog_message">Psiphon has detected and blocked access to potentially malicious sites on the Internet. Please follow the links below to learn more.\n\nDetected malware:</string>
+    <!-- Title of the alert dialog which prompts the user to enable or disable unsafe Internet traffic alerts -->
+    <string name="unsafe_traffic_alert_prompt_title">Psiphon MalAware</string>
+    <!-- Content of the alert dialog which prompts the user to enable or disable unsafe Internet traffic alerts -->
+    <string name="unsafe_traffic_alert_prompt_message">Psiphon automatically blocks access to potentially malicious sites on the Internet. Would you like to be notified when this occurs?\n\nThis setting can be changed later in More Options.</string>
+    <!-- More info with a URL link in the contents of the alert dialog which prompts the user to enable or disable unsafe Internet traffic alerts -->
+    <string name="unsafe_traffic_alert_prompt_message_more_info">Learn more about MalAware here:</string>
+    <!-- "Upstream proxy error" notification title -->
+    <string name="notification_title_upstream_proxy_error">Upstream proxy error</string>
+    <!-- "Upstream proxy error" notification text -->
+    <string name="notification_text_upstream_proxy_error">Please open Psiphon and check proxy settings.</string>
+    <!-- "Upstream proxy error" alert dialog title -->
+    <string name="upstream_proxy_error_alert_title">Proxy Error</string>
+    <!-- "Upstream proxy error" alert dialog message -->
+    <string name="upstream_proxy_error_alert_message">"You have configured Psiphon to use an upstream proxy. However, we seem to be unable to connect to a Psiphon server through that proxy.\n\nPlease fix the settings and try again.\n\nSee logs for technical info."</string>
+    <!-- Notification title for the 'Psiphon crash detected' notification -->
+    <string name="psiphon_native_crash_notification_title">Psiphon Crashed Earlier</string>
+    <!-- Notification short message for the 'Psiphon crash detected' notification -->
+    <string name="psiphon_native_crash_notification_msg">Please send us feedback.</string>
+    <!-- Notification longer message for the 'Psiphon crash detected' notification -->
+    <string name="psiphon_native_crash_notification_msg_long">Please click this notification to send us feedback. This will help us understand the problem so that we can fix it faster.</string>
+
+    <!-- Data collection disclosure prompt button text -->
+    <string name="vpn_data_collection_disclosure_accept_btn_text">I accept</string>
+
+    <!-- Data collection disclosure prompt title -->
+    <string name="vpn_data_collection_disclosure_prompt_title">Data collection disclosure</string>
+
+    <!-- First sentence of the data collection disclosure prompt body. The format qualifier %s will be replaced by the app name, either 'Psiphon' or 'Psiphon Pro' and should be placed according to the rules of the translation language. -->
+    <string name="vpn_data_collection_disclosure_top">%s uses the Android VPN service to provide you with uncensored access to Internet content. We collect, aggregate, and store the following information:</string>
+
+    <!-- Data collection disclosure list item -->
+    <string name="vpn_data_collection_disclosure_bp1">Your city, country, ISP, and optionally, approximate location. The city, country, and ISP are derived from the IP address that you connect to our servers from, and the IP address itself is never logged. This data is collected for usage and performance statistics and service health purposes.</string>
+
+    <!-- Data collection disclosure list item -->
+    <string name="vpn_data_collection_disclosure_bp2">Your email, when you send us a diagnostics or crash log feedback. Providing email in the feedback is optional.</string>
+
+    <!-- Data collection disclosure list item -->
+    <string name="vpn_data_collection_disclosure_bp3">Your PsiCash account username, password, and optionally, email.</string>
+
+    <!--Generic 'close' button label -->
+    <string name="close_btn_label">Close</string>
+
+    <!--Notifications permission rationale alert title. The format qualifier %s will be replaced by the app name, either 'Psiphon' or 'Psiphon Pro' and should be placed according to the rules of the translation language. -->
+    <string name="notifications_permission_rationale_title">%s Notifications</string>
+
+    <!-- First sentence of the notifications permission rationale message. The format qualifier %s will be replaced by the app name, either 'Psiphon' or 'Psiphon Pro' and should be placed according to the rules of the translation language. -->
+    <string name="notifications_permission_rationale_intro">%s uses notifications to provide you with important information when the app is in the background. This includes:</string>
+
+    <!-- Notifications permission rationale list item -->
+    <string name="notifications_permission_rationale_vpn_state_bp">Changes to your VPN connection state.</string>
+
+    <!-- Notifications permission rationale list item -->
+    <string name="notifications_permission_rationale_connection_problems_bp">Problems with your connection.</string>
+
+    <!-- Notifications permission rationale list item -->
+    <string name="notifications_permission_rationale_crash_reports_bp">Crash reports.</string>
+
+    <!-- Notifications permission rationale list item, do not translate or transliterate "MalAware" -->
+    <string name="notifications_permission_rationale_malaware_alerts_bp">MalAware alerts.</string>
+
+    <!-- Notifications permission rationale list item -->
+    <string name="notifications_permission_rationale_upgrade_available_bp">New app versions available.</string>
+
+    <!-- Notifications permission rationale last sentence -->
+    <string name="notifications_permission_rationale_disable_any_time">You can disable notifications in the app settings at any time.</string>
+
+    <!-- Message telling users to enable NFC in system settings in order to use NFC connection data exchange feature -->
+    <string name="enable_nfc_in_settings">Please enable NFC in settings</string>
+
+    <!-- NFC connection data exchange error message -->
+    <string name="nfc_export_data_empty">Error communicating with the other device. Please check that Psiphon is open and connected on the other device and try again.</string>
+
+    <!-- NFC connection data exchange message when waiting for interaction with host device -->
+    <string name="nfc_reader_default_message">Waiting for NFC interaction with the other device…</string>
+
+    <!-- NFC connection data exchange success message -->
+    <string name="nfc_export_success">Connection information exchanged successfully!</string>
+
+    <!-- NFC connection data exchange error message -->
+    <string name="nfc_export_bad_data">Error communicating with the other device. Please try again.</string>
+
+    <!-- NFC connection data exchange error message -->
+    <string name="nfc_export_lost_tag">Device moved too fast, connection lost. Please try again.</string>
+
+    <!-- NFC connection data exchange error message -->
+    <string name="nfc_export_unsupported_tag">Unsupported NFC tag discovered. Is Psiphon open and connected on the other device?</string>
+
+    <!-- NFC connection data exchange message when devices are connected and data is being exchanged -->
+    <string name="nfc_export_reading_data">Reading data…</string>
+
+    <!-- Tooltip appearing on long press of the button that opens NFC connection exchange dialog -->
+    <string name="help_connect_fab_tooltip">Get help connecting</string>
+
+    <!-- Label on the button that opens NFC exchange onboarding screen -->
+    <string name="help_btn_label">Help</string>
+
+    <!--  NFC connection exchange onboarding / tutorial Skip button label, closes the tutorial dialog when pressed -->
+    <string name="onboarding_skip">Skip</string>
+
+    <!--  NFC connection exchange onboarding / tutorial Next button label, shows next slide when pressed -->
+    <string name="onboarding_next">Next</string>
+
+    <!-- NFC connection exchange onboarding / tutorial Done button label, appears on last slide and closes the tutorial when pressed -->
+    <string name="onboarding_done">Done</string>
+
+    <!-- NFC connection exchange onboarding / tutorial slide text -->
+    <string name="psiphon_bump_help_1">If you are having trouble connecting to a Psiphon server, find a friend who has successfully connected and share their connection information using NFC.</string>
+
+    <!-- NFC connection exchange onboarding / tutorial slide text, do not translate or transliterate 'Psiphon Bump' -->
+    <string name="psiphon_bump_help_2">Make sure that Psiphon is open and connected and the Psiphon Bump icon is showing in the app bar on the other device.</string>
+
+    <!-- NFC connection exchange onboarding / tutorial slide text, do not translate or transliterate 'Psiphon Bump' -->
+    <string name="psiphon_bump_help_3">With the Psiphon Bump dialog open on your device and the Psiphon app open and connected on the other device, place your devices back to back to initiate a connection information data transfer.</string>
+
+    <!-- NFC connection exchange onboarding / tutorial slide text, do not translate or transliterate 'Psiphon Bump'  -->
+    <string name="psiphon_bump_help_4">Once the connection information data transfer is complete and your Psiphon app is able to connect, the Psiphon Bump dialog will close automatically. If you still cannot connect, you can retry until Psiphon connects successfully.</string>
+
+    <!-- Title of the alert dialog prompting the user to enable NFC in system settings, do not translate or transliterate 'Psiphon Bump' -->
+    <string name="psiphon_bump_need_system_nfc_title">Psiphon Bump</string>
+
+    <!-- Alert dialog message prompting the user to enable NFC in system settings, do not translate or transliterate 'Psiphon Bump'  -->
+    <string name="psiphon_bump_need_system_nfc_message">Please turn on NFC in the system settings to enable Psiphon Bump helper mode.</string>
+
+    <!-- Button that opens NFC related system settings -->
+    <string name="psiphon_bump_need_system_nfc_open_btn">Open settings</string>
+
+    <!--Approximate location permission rationale alert title. -->
+    <string name="location_permission_rationale_title">Approximate Location</string>
+
+    <!--Approximate location permission rationale alert text. The format qualifier %s will be replaced by the app name, either 'Psiphon' or 'Psiphon Pro'  -->
+    <string name="location_permission_rationale_text">Please allow %s to access your device\'s approximate location. Your location data estimate is used to optimize the Psiphon network, and is accurate to within about 3 square kilometers.</string>
+
+    <!-- Status summary appearing in the app settings below the Personal Pairing preference indicating that the feature is enabled -->
+    <string name="preference_summary_personal_pairing_enabled">Enabled</string>
+
+    <!-- Status summary appearing in the app settings below the Personal Pairing preference indicating that the feature is enabled with an alias, as in "Via John's Phone" -->
+    <string name="preference_summary_personal_pairing_enabled_with_alias">Via %1$s</string>
+
+    <!-- Status summary appearing in the app settings below the Personal Pairing preference indicating that the feature is disabled -->
+    <string name="preference_summary_personal_pairing_disabled">Disabled</string>
+
+    <!-- Personal Pairing preference screen title -->
+    <string name="personal_pairing_screen_title">Connect through a trusted peer\'s Conduit station for enhanced privacy and access. You\'ll need a pairing link to get started.</string>
+
+    <!-- Personal Pairing Enable checkbox title -->
+    <string name="personal_pairing_enable_title">Enable Personal Pairing</string>
+
+    <!-- Personal Pairing Enable checkbox summary -->
+    <string name="personal_pairing_enable_summary">Connect via Conduit station</string>
+
+    <!-- Import Pairing URL button title -->
+    <string name="personal_pairing_import_title">Import pairing URL</string>
+
+    <!-- Import Pairing URL dialog title -->
+    <string name="personal_pairing_import_dialog_title">Pairing URL</string>
+
+    <!-- A message shown in the text field where the user should paste the pairing URL -->
+    <string name="personal_pairing_url_hint">Paste pairing URL here</string>
+
+    <!-- Personal Pairing Invalid URL Format error message -->
+    <string name="personal_pairing_invalid_url">Invalid pairing URL format</string>
+
+    <!-- Personal Pairing invalid Data Format error message -->
+    <string name="personal_pairing_invalid_data">Invalid pairing data format</string>
+
+    <!-- Personal Pairing unsupported token version error message -->
+    <string name="personal_pairing_unsupported_version">Unsupported pairing token version</string>
+
+    <!-- A warning message shown when the user tries to enable Personal Pairing while the pairing compartment ID is not set -->
+    <string name="personal_pairing_need_compartment_id">Please import a pairing URL first</string>
+
+    <!-- Personal Pairing Compartment ID setting title -->
+    <string name="personal_pairing_compartment_id_title">Pairing ID</string>
+
+    <!-- Personal Pairing Compartment ID setting summary -->
+    <string name="personal_pairing_compartment_id_summary">Your unique pairing identifier</string>
+
+    <!-- Pairing Alias setting title -->
+    <string name="personal_pairing_alias_title">Pairing alias</string>
+
+    <!-- Pairing Alias setting summary -->
+    <string name="personal_pairing_alias_summary">A friendly name for this pairing configuration</string>
+
+    <!-- Button label for the Import button in the Import Pairing URL dialog -->
+    <string name="import_button">Import</string>
+
+    <!-- Label for the Personal Pairing preference in the app settings -->
+    <string name="label_personal_pairing_settings">Personal Pairing</string>
+
+    <!-- Prompt button shown on main screen when Personal Pairing is enabled and connection is taking too long -->
+    <string name="personal_pairing_turn_off_prompt">Trouble connecting? Turn off Personal Pairing</string>
+
+    <!-- Personal Pairing data import success message -->
+    <string name="personal_pairing_data_import_success">Personal Pairing configuration saved</string>
+
+    <!-- Personal Pairing data import update success message -->
+    <string name="personal_pairing_data_update_success">Personal Pairing configuration updated</string>
+
+    <!-- Personal Pairing data import data already exists (as in, the user is trying to import the same data again) -->
+    <string name="personal_pairing_data_already_exists">Personal Pairing configuration already exists</string>
+
+    <!-- Personal Pairing data update confirmation dialog title -->
+    <string name="personal_pairing_update_title">Update Personal Pairing data</string>
+
+    <!-- Personal Pairing data update confirmation dialog message text before the current(old) pairing ID, as in "Current pairing ID: 123456" -->
+    <string name="personal_pairing_update_current_id_label">Current Personal Pairing ID:</string>
+
+    <!-- Personal Pairing data update confirmation dialog message text before the new pairing ID, as in "New pairing ID: 654321" -->
+    <string name="personal_pairing_update_new_id_label">New Personal Pairing ID:</string>
+
+    <!-- Personal Pairing data update confirmation dialog positive button label -->
+    <string name="personal_pairing_update_positive_button">Update</string>
+
+    <!-- Personal Pairing data update confirmation dialog negative button label -->
+    <string name="personal_pairing_update_negative_button">Cancel</string>
+
+    <!-- Personal Pairing enable the feature confirmation dialog title, appears when the user clicks the deep link to enable the feature and the tunnel is currently running -->
+    <string name="personal_pairing_enable_confirmation_dialog_title">Enable Personal Pairing</string>
+
+    <!-- Personal Pairing enable the feature confirmation dialog message, appears when the user clicks the deep link to enable the feature and the tunnel is currently running -->
+    <string name="personal_pairing_enable_confirmation_dialog_message">Enable personal pairing now? This will restart the active tunnel. Otherwise, settings will be imported and remain disabled until manually enabled in the application settings.</string>
+
+    <!-- Personal Pairing clickable setting title to reset (remove) the pairing configuration -->
+    <string name="personal_pairing_reset_title">Reset Personal Pairing</string>
+
+    <!-- Personal Pairing clickable setting summary to reset (remove) the pairing configuration -->
+    <string name="personal_pairing_reset_summary">Remove this Personal Pairing configuration permanently</string>
+
+    <!-- Personal Pairing reset confirmation dialog title -->
+    <string name="personal_pairing_reset_dialog_title">Reset Personal Pairing</string>
+
+    <!-- Personal Pairing reset confirmation input field hint -->
+    <string name="personal_pairing_delete_hint">Enter symbols to confirm</string>
+
+    <!-- Personal Pairing reset confirmation dialog message, preserve the %d placeholder for the number of symbols to enter, the symbols will be shown below -->
+    <string name="personal_pairing_delete_message">To remove this Personal Pairing configuration, enter the last %d symbols of the Pairing ID:</string>
+
+    <!-- Personal Pairing reset operation error message -->
+    <string name="personal_pairing_reset_error">Unable to reset configuration</string>
+
+    <!-- Personal Pairing reset operation error message when the user enters incorrect confirmation symbols -->
+    <string name="personal_pairing_reset_invalid">Please enter correct confirmation symbols</string>
+
+    <!-- Personal Pairing reset operation success message -->
+    <string name="personal_pairing_reset_success">Configuration reset</string>
+
+    <!-- Generic reset button label -->
+    <string name="reset_button">Reset</string>
+</resources>
