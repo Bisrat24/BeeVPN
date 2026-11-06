@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/card_rounded"
+    android:padding="20dp">
+
+    <!-- Header -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="App Routing (Split Tunnel)"
+        android:textColor="@color/bee_gold"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="12dp"
+        android:text="Select which applications route traffic through BeeVPN."
+        android:textColor="@color/text_gray"
+        android:textSize="12sp" />
+
+    <!-- Radio Options -->
+    <RadioGroup
+        android:id="@+id/rg_tunnel_mode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="10dp">
+
+        <RadioButton
+            android:id="@+id/rb_all_apps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Route all applications (Default)"
+            android:textColor="@color/text_white"
+            android:textSize="13sp"
+            android:paddingStart="6dp" />
+
+        <RadioButton
+            android:id="@+id/rb_selected_apps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Route only selected applications"
+            android:textColor="@color/text_white"
+            android:textSize="13sp"
+            android:paddingStart="6dp" />
+    </RadioGroup>
+
+    <!-- Quick Action Bar for Selection -->
+    <LinearLayout
+        android:id="@+id/layout_app_actions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/btn_quick_popular"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/card_rounded"
+            android:text="Browsers &amp; Social"
+            android:textColor="@color/bee_gold"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btn_clear_all_apps"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/card_rounded"
+            android:text="Clear All"
+            android:textColor="@color/text_dim"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- Installed Apps List -->
+    <ListView
+        android:id="@+id/lv_installed_apps"
+        android:layout_width="match_parent"
+        android:layout_height="280dp"
+        android:divider="@color/card_stroke"
+        android:dividerHeight="1dp"
+        android:background="@drawable/card_rounded"
+        android:layout_marginBottom="14dp" />
+
+    <!-- Dialog Actions -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="end">
+
+        <Button
+            android:id="@+id/btn_cancel_app_dialog"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginEnd="10dp"
+            android:background="@null"
+            android:text="Cancel"
+            android:textColor="@color/text_gray"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btn_save_app_dialog"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:background="@drawable/card_rounded"
+            android:text="Apply &amp; Save"
+            android:textColor="@color/bee_gold"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+</LinearLayout>

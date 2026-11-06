@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BeeVPN</string>
+    <string name="connect">TAP TO CONNECT</string>
+    <string name="disconnect">DISCONNECT</string>
+    <string name="connecting">SECURING TUNNEL...</string>
+    <string name="status_not_connected">Not Protected</string>
+    <string name="status_connected_desc">Encrypted &amp; Protected</string>
+    <string name="server_title">Optimal Server (Auto)</string>
+    <string name="server_subtitle">Ultra-Fast DNS Routing</string>
+    <string name="download_label">DOWNLOAD</string>
+    <string name="upload_label">UPLOAD</string>
+    <string name="duration_label">SESSION TIME</string>
+    <string name="ping_label">LATENCY</string>
+    <string name="kill_switch">Smart Kill Switch</string>
+    <string name="auto_reconnect">Auto-Reconnect on Drop</string>
+    <string name="notification_title">BeeVPN Active</string>
+    <string name="notification_text">Your network traffic is encrypted and secured.</string>
+    <string name="mode_psiphon">Psiphon Network (Global Bypass)</string>
+    <string name="mode_cloudflare">Cloudflare WARP (Fast Direct)</string>
+</resources>

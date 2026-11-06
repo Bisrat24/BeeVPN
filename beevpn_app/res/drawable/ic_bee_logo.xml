@@ -1,0 +1,47 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="128dp"
+    android:height="128dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+    <!-- Hexagonal Background Shield -->
+    <path
+        android:fillColor="#151E2E"
+        android:strokeColor="#F59E0B"
+        android:strokeWidth="4"
+        android:pathData="M64,6 L118,36 L118,92 L64,122 L10,92 L10,36 Z" />
+    <!-- Bee Abdomen Striped Stripes -->
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M64,55 L74,55 C77,65 77,80 64,95 C51,80 51,65 54,55 Z" />
+    <path
+        android:fillColor="#0B0F19"
+        android:pathData="M56,66 L72,66 C71,72 70,75 64,80 C58,75 57,72 56,66 Z" />
+    <path
+        android:fillColor="#0B0F19"
+        android:pathData="M59,84 L69,84 C68,88 66,91 64,93 C62,91 60,88 59,84 Z" />
+    <!-- Bee Head -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M64,40 C70,40 73,44 73,50 L55,50 C55,44 58,40 64,40 Z" />
+    <!-- Bee Antennae -->
+    <path
+        android:strokeColor="#FBBF24"
+        android:strokeWidth="2.5"
+        android:pathData="M60,42 Q54,30 46,32" />
+    <path
+        android:strokeColor="#FBBF24"
+        android:strokeWidth="2.5"
+        android:pathData="M68,42 Q74,30 82,32" />
+    <!-- Left Wing (Translucent Glow) -->
+    <path
+        android:fillColor="#8038BDF8"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="1.5"
+        android:pathData="M56,52 C40,40 25,48 35,66 C42,75 52,65 56,52 Z" />
+    <!-- Right Wing (Translucent Glow) -->
+    <path
+        android:fillColor="#8038BDF8"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="1.5"
+        android:pathData="M72,52 C88,40 103,48 93,66 C86,75 76,65 72,52 Z" />
+</vector>
