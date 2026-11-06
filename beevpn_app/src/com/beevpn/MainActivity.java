@@ -489,10 +489,8 @@ public class MainActivity extends Activity {
             long secs = durationSec % 60;
             mTvDuration.setText(String.format(Locale.US, "%02d:%02d:%02d", hrs, mins, secs));
 
-            double rxMb = rxBytes / (1024.0 * 1024.0);
-            double txMb = txBytes / (1024.0 * 1024.0);
-            mTvDownload.setText(String.format(Locale.US, "%.1f MB", rxMb));
-            mTvUpload.setText(String.format(Locale.US, "%.1f MB", txMb));
+            mTvDownload.setText(BeeVpnService.formatBytes(rxBytes));
+            mTvUpload.setText(BeeVpnService.formatBytes(txBytes));
 
             mTvLatency.setText("● 24 ms");
             mTvLatency.setTextColor(getColor(R.color.status_connected));

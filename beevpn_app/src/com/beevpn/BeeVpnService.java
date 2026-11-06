@@ -13,7 +13,6 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
-import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -51,7 +50,9 @@ public class BeeVpnService extends VpnService {
     public static final String EXTRA_TX_BYTES = "extra_tx_bytes";
 
     private static final String CHANNEL_ID = "beevpn_channel";
+    private static final String CHANNEL_ALERTS_ID = "beevpn_alerts";
     private static final int NOTIFICATION_ID = 7701;
+    private static final int NOTIFICATION_DISCONNECTED_ID = 7702;
 
     private static volatile boolean sIsRunning = false;
     private static volatile boolean sIsConnecting = false;
@@ -126,7 +127,11 @@ public class BeeVpnService extends VpnService {
         if (sIsRunning || sIsConnecting) return;
 
         createNotificationChannel();
-        startForeground(NOTIFICATION_ID, buildNotification("Securing connection..."));
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) {
+            nm.cancel(NOTIFICATION_DISCONNECTED_ID);
+        }
+        startForeground(NOTIFICATION_ID, buildNotification("BeeVPN Tunnel", "Securing connection..."));
 
         mStartTime = System.currentTimeMillis();
         mRxBytes = 0;
@@ -166,7 +171,7 @@ public class BeeVpnService extends VpnService {
             sIsConnecting = false;
             mLastStatusMsg = "Cloudflare WARP Active";
             LogManager.log("WARP", "CONNECTED! Ultra-fast direct tunnel active (DNS: 1.1.1.1).");
-            updateNotification("Protected via Cloudflare WARP");
+            updateNotification("BeeVPN Connected", "Protected via Cloudflare WARP");
             broadcastStatus(true, false, mLastStatusMsg);
 
             startDnsWorker();
@@ -300,7 +305,7 @@ public class BeeVpnService extends VpnService {
             sIsRunning = false;
             mLastStatusMsg = "Connecting to Psiphon...";
             LogManager.log("PSIPHON", "Initializing Psiphon Tunnel Core v495...");
-            updateNotification("Connecting to Psiphon network...");
+            updateNotification("BeeVPN Connecting", "Connecting to Psiphon network...");
             broadcastStatus(false, true, mLastStatusMsg);
 
             mPsiphonTunnel = PsiphonTunnel.newPsiphonTunnel(new PsiphonTunnel.HostService() {
@@ -321,6 +326,7 @@ public class BeeVpnService extends VpnService {
                         config.put("EgressRegion", "");
                         config.put("EmitDiagnosticNotices", true);
                         config.put("EmitDiagnosticNetworkParameters", true);
+                        config.put("EmitBytesTransferred", true);
                         config.put("DisableTimeouts", true);
                         config.put("NetworkLatencyMultiplierLambda", 0.05);
 
@@ -453,7 +459,7 @@ public class BeeVpnService extends VpnService {
                     sIsConnecting = false;
                     mLastStatusMsg = "Psiphon Connected";
                     LogManager.log("STATUS", "CONNECTED! Encrypted tunnel online.");
-                    updateNotification("Connected via Psiphon Network");
+                    updateNotification("BeeVPN Connected", "Connected via Psiphon Network");
                     if (mSocksPort > 0) {
                         establishPsiphonVpn(mSocksPort);
                     }
@@ -527,7 +533,7 @@ public class BeeVpnService extends VpnService {
             mTun2SocksThread.start();
 
             mLastStatusMsg = "Psiphon Connected";
-            updateNotification("Connected via Psiphon Network");
+            updateNotification("BeeVPN Connected", "Connected via Psiphon Network");
             broadcastStatus(true, false, mLastStatusMsg);
 
         } catch (Exception e) {
@@ -590,18 +596,34 @@ public class BeeVpnService extends VpnService {
         return loadRawResource(R.raw.servers);
     }
 
+    public static String formatBytes(long bytes) {
+        if (bytes <= 0) return "0.0 MB";
+        if (bytes < 1024 * 1024) {
+            return String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0);
+        } else if (bytes < 1024 * 1024 * 1024) {
+            return String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0));
+        } else {
+            return String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+        }
+    }
+
     private void startStatsTicker() {
         mHandler.postDelayed(new Runnable() {
             @Override
             public void run() {
                 if (!sIsRunning && !sIsConnecting) return;
                 broadcastStatus(sIsRunning, sIsConnecting, mLastStatusMsg);
+                if (sIsRunning) {
+                    String stats = "Protected (↓ " + formatBytes(mRxBytes) + "  •  ↑ " + formatBytes(mTxBytes) + ")";
+                    updateNotification("BeeVPN Connected", stats);
+                }
                 mHandler.postDelayed(this, 1000);
             }
         }, 1000);
     }
 
     private synchronized void stopVpn() {
+        boolean wasActive = sIsRunning || sIsConnecting;
         sIsRunning = false;
         sIsConnecting = false;
         mShouldStop = true;
@@ -634,7 +656,39 @@ public class BeeVpnService extends VpnService {
         LogManager.log("STATUS", "Tunnel disconnected. Device traffic restored to normal.");
         broadcastStatus(false, false, "Disconnected");
         stopForeground(true);
+
+        if (wasActive) {
+            showDisconnectedNotification();
+        }
+
         stopSelf();
+    }
+
+    private void showDisconnectedNotification() {
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+
+        createNotificationChannel();
+
+        Intent mainIntent = new Intent(this, MainActivity.class);
+        PendingIntent pi = PendingIntent.getActivity(this, 0, mainIntent, PendingIntent.FLAG_IMMUTABLE);
+
+        Notification.Builder nb;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nb = new Notification.Builder(this, CHANNEL_ALERTS_ID);
+        } else {
+            nb = new Notification.Builder(this);
+        }
+
+        Notification notif = nb.setContentTitle("BeeVPN Disconnected")
+                .setContentText("Tunnel disconnected. Device traffic restored to normal.")
+                .setSmallIcon(android.R.drawable.stat_sys_upload)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .setOngoing(false)
+                .build();
+
+        nm.notify(NOTIFICATION_DISCONNECTED_ID, notif);
     }
 
     private void broadcastStatus(boolean isConnected, boolean isConnecting, String msg) {
@@ -652,18 +706,28 @@ public class BeeVpnService extends VpnService {
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "BeeVPN Active Service",
-                    NotificationManager.IMPORTANCE_LOW
-            );
-            channel.setDescription("Shows active connection and protection status");
             NotificationManager nm = getSystemService(NotificationManager.class);
-            if (nm != null) nm.createNotificationChannel(channel);
+            if (nm != null) {
+                NotificationChannel serviceChannel = new NotificationChannel(
+                        CHANNEL_ID,
+                        "BeeVPN Active Service",
+                        NotificationManager.IMPORTANCE_LOW
+                );
+                serviceChannel.setDescription("Shows active connection and protection status");
+                nm.createNotificationChannel(serviceChannel);
+
+                NotificationChannel alertChannel = new NotificationChannel(
+                        CHANNEL_ALERTS_ID,
+                        "BeeVPN Status Alerts",
+                        NotificationManager.IMPORTANCE_DEFAULT
+                );
+                alertChannel.setDescription("Notifies on connection status changes");
+                nm.createNotificationChannel(alertChannel);
+            }
         }
     }
 
-    private Notification buildNotification(String text) {
+    private Notification buildNotification(String title, String text) {
         Intent mainIntent = new Intent(this, MainActivity.class);
         PendingIntent pi = PendingIntent.getActivity(this, 0, mainIntent, PendingIntent.FLAG_IMMUTABLE);
 
@@ -678,7 +742,7 @@ public class BeeVpnService extends VpnService {
             nb = new Notification.Builder(this);
         }
 
-        return nb.setContentTitle("BeeVPN Tunnel")
+        return nb.setContentTitle(title)
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_upload)
                 .setContentIntent(pi)
@@ -687,10 +751,10 @@ public class BeeVpnService extends VpnService {
                 .build();
     }
 
-    private void updateNotification(String text) {
+    private void updateNotification(String title, String text) {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {
-            nm.notify(NOTIFICATION_ID, buildNotification(text));
+            nm.notify(NOTIFICATION_ID, buildNotification(title, text));
         }
     }
 

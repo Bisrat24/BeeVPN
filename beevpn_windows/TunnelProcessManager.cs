@@ -252,6 +252,7 @@ namespace BeeVPN
                 ["EgressRegion"] = "",
                 ["EmitDiagnosticNotices"] = true,
                 ["EmitDiagnosticNetworkParameters"] = true,
+                ["EmitBytesTransferred"] = true,
                 ["DisableTimeouts"] = true,
                 ["NetworkLatencyMultiplierLambda"] = 0.05,
                 ["RemoteServerListURLs"] = new object[]

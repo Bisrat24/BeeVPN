@@ -13,3 +13,6 @@ beevpn_app/dex/
 beevpn_windows/bin/
 beevpn_windows/obj/
 _backups/
+tools/
+psiphon-android/
+logs-phone.txt

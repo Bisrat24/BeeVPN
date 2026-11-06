@@ -241,6 +241,12 @@ namespace BeeVPN
                     _statsTimer.Start();
                     AppendLog("WARP", "CONNECTED! Ultra-fast direct tunnel active (DNS: 1.1.1.1).");
                     UpdateUiState();
+                    _notifyIcon.ShowBalloonTip(
+                        3000,
+                        "BeeVPN Connected",
+                        "Encrypted tunnel is now online (Cloudflare WARP - 1.1.1.1).",
+                        Forms.ToolTipIcon.Info
+                    );
                 }
                 else
                 {
@@ -253,6 +259,7 @@ namespace BeeVPN
 
         private void DisconnectVpn()
         {
+            bool wasActive = _isConnected || _isConnecting;
             AppendLog("CORE", "Disconnecting tunnel...");
 
             if (_selectedMode == 0)
@@ -271,6 +278,16 @@ namespace BeeVPN
 
             AppendLog("STATUS", "Tunnel disconnected. Device traffic restored to normal.");
             UpdateUiState();
+
+            if (wasActive)
+            {
+                _notifyIcon.ShowBalloonTip(
+                    3000,
+                    "BeeVPN Disconnected",
+                    "Tunnel disconnected. Device traffic restored to normal.",
+                    Forms.ToolTipIcon.Warning
+                );
+            }
         }
 
         private void OnTunnelConnected(string region, string protocol)
@@ -294,6 +311,13 @@ namespace BeeVPN
 
                 AppendLog("STATUS", $"CONNECTED! Encrypted tunnel online (Region: {region}, Proto: {protocol}).");
                 UpdateUiState();
+
+                _notifyIcon.ShowBalloonTip(
+                    3000,
+                    "BeeVPN Connected",
+                    $"Encrypted tunnel online and routing traffic ({region} via {protocol}).",
+                    Forms.ToolTipIcon.Info
+                );
             });
         }
 
@@ -309,11 +333,21 @@ namespace BeeVPN
         {
             Dispatcher.Invoke(() =>
             {
-                _rxBytes = received;
-                _txBytes = sent;
-                tvDownload.Text = $"{(_rxBytes / (1024.0 * 1024.0)):F1} MB";
-                tvUpload.Text = $"{(_txBytes / (1024.0 * 1024.0)):F1} MB";
+                _rxBytes += received;
+                _txBytes += sent;
+                tvDownload.Text = FormatTraffic(_rxBytes);
+                tvUpload.Text = FormatTraffic(_txBytes);
             });
+        }
+
+        private static string FormatTraffic(long bytes)
+        {
+            if (bytes <= 0) return "0.0 MB";
+            if (bytes < 1024 * 1024)
+                return $"{bytes / 1024.0:F1} KB";
+            if (bytes < 1024 * 1024 * 1024)
+                return $"{bytes / (1024.0 * 1024.0):F1} MB";
+            return $"{bytes / (1024.0 * 1024.0 * 1024.0):F2} GB";
         }
 
         private void OnTunnelDisconnected()
