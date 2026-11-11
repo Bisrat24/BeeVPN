@@ -17,5 +17,5 @@
     <string name="notification_title">BeeVPN Active</string>
     <string name="notification_text">Your network traffic is encrypted and secured.</string>
     <string name="mode_psiphon">Psiphon Network (Global Bypass)</string>
-    <string name="mode_cloudflare">Cloudflare WARP (Fast Direct)</string>
+    <string name="mode_cloudflare">Cloudflare DNS (1.1.1.1 Fast)</string>
 </resources>

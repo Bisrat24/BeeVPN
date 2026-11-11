@@ -291,7 +291,7 @@ namespace BeeVPN
                 ["DNSResolverAlternateServers"] = new[] { "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4" }
             };
 
-            if (!string.IsNullOrEmpty(additionalParams))
+            if (!string.IsNullOrWhiteSpace(additionalParams))
             {
                 configObj["AdditionalParameters"] = additionalParams;
             }

@@ -527,7 +527,7 @@ public class MainActivity extends Activity {
             if (latency > 0) {
                 mTvLatency.setText("● " + latency + " ms");
             } else {
-                mTvLatency.setText("● Active");
+                mTvLatency.setText("○ Measuring");
             }
             mTvLatency.setTextColor(resolveColor(R.color.status_connected));
 

@@ -23,9 +23,12 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.util.List;
 import java.util.Set;
 
@@ -139,9 +142,11 @@ public class BeeVpnService extends VpnService {
         }
         startForeground(NOTIFICATION_ID, buildNotification("BeeVPN Tunnel", "Securing connection..."));
 
-        mStartTime = System.currentTimeMillis();
+        mStartTime = 0;
         mRxBytes.set(0);
         mTxBytes.set(0);
+        mMeasuredLatencyMs = -1;
+        mLastLatencyCheck = 0;
         mShouldStop = false;
 
         if (mode == MODE_PSIPHON) {
@@ -163,7 +168,10 @@ public class BeeVpnService extends VpnService {
             builder.addDnsServer("1.0.0.1");
             builder.addRoute("1.1.1.1", 32);
             builder.addRoute("1.0.0.1", 32);
-            applyAppRouting(builder);
+            // DNS mode must cover every app's resolver traffic; split-tunnel selections do not apply.
+            try {
+                builder.addDisallowedApplication(getPackageName());
+            } catch (Exception ignored) {}
             builder.setMtu(1500);
 
             mVpnInterface = builder.establish();
@@ -175,6 +183,7 @@ public class BeeVpnService extends VpnService {
 
             sIsRunning = true;
             sIsConnecting = false;
+            mStartTime = System.currentTimeMillis();
             mLastStatusMsg = "Cloudflare DNS Active";
             LogManager.log("DNS", "ACTIVE! Fast DNS resolver active (1.1.1.1). General device traffic is direct.");
             updateNotification("BeeVPN DNS Active", "DNS via 1.1.1.1 (General traffic direct)");
@@ -548,11 +557,14 @@ public class BeeVpnService extends VpnService {
             }
             if (mVpnInterface == null) {
                 LogManager.log("ERROR", "VPN establish() returned null! Please re-grant VPN permission.");
+                mLastStatusMsg = "VPN permission required";
+                mHandler.post(BeeVpnService.this::stopVpn);
                 return;
             }
 
             sIsRunning = true;
             sIsConnecting = false;
+            mStartTime = System.currentTimeMillis();
 
             mTun2SocksThread = new Thread(() -> {
                 try {
@@ -585,6 +597,7 @@ public class BeeVpnService extends VpnService {
 
         } catch (Exception e) {
             LogManager.log("ERROR", "Failed to establish VPN interface: " + e.getMessage());
+            mHandler.post(BeeVpnService.this::stopVpn);
         }
     }
 
@@ -660,18 +673,16 @@ public class BeeVpnService extends VpnService {
             public void run() {
                 if (!sIsRunning && !sIsConnecting) return;
 
-                // Live latency check to 1.1.1.1 every 5s while connected
+                // Live latency check every 5s while connected
                 if (sIsRunning && System.currentTimeMillis() - mLastLatencyCheck > 5000) {
                     mLastLatencyCheck = System.currentTimeMillis();
+                    final int mode = sCurrentMode;
+                    final int socks = mSocksPort;
                     new Thread(() -> {
-                        try {
-                            long t0 = System.currentTimeMillis();
-                            java.net.Socket s = new java.net.Socket();
-                            s.connect(new java.net.InetSocketAddress("1.1.1.1", 53), 2000);
-                            s.close();
-                            mMeasuredLatencyMs = (int) (System.currentTimeMillis() - t0);
-                        } catch (Exception ignored) {
-                            mMeasuredLatencyMs = -1;
+                        if (mode == MODE_PSIPHON) {
+                            mMeasuredLatencyMs = socks > 0 ? probeLatencyViaSocks(socks) : -1;
+                        } else {
+                            mMeasuredLatencyMs = probeDirectLatency();
                         }
                     }, "BeeVpn-Ping").start();
                 }
@@ -685,6 +696,74 @@ public class BeeVpnService extends VpnService {
                 mHandler.postDelayed(this, 1000);
             }
         }, 1000);
+    }
+
+    private static int probeDirectLatency() {
+        Socket s = new Socket();
+        try {
+            long t0 = System.currentTimeMillis();
+            s.connect(new InetSocketAddress("1.1.1.1", 53), 2000);
+            return (int) (System.currentTimeMillis() - t0);
+        } catch (Exception e) {
+            return -1;
+        } finally {
+            try { s.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    // Measures the real tunnel path: BeeVPN itself is excluded from the TUN, so a
+    // direct socket would always report pre-tunnel latency.
+    private static int probeLatencyViaSocks(int socksPort) {
+        Socket s = new Socket();
+        try {
+            long t0 = System.currentTimeMillis();
+            s.connect(new InetSocketAddress("127.0.0.1", socksPort), 3000);
+            s.setSoTimeout(3000);
+            OutputStream out = s.getOutputStream();
+            InputStream in = s.getInputStream();
+
+            out.write(new byte[]{0x05, 0x01, 0x00});
+            out.flush();
+            byte[] greeting = new byte[2];
+            readFully(in, greeting, 2);
+            if (greeting[0] != 0x05 || greeting[1] != 0x00) return -1;
+
+            // CONNECT 1.1.1.1:443
+            out.write(new byte[]{0x05, 0x01, 0x00, 0x01, 1, 1, 1, 1, 0x01, (byte) 0xBB});
+            out.flush();
+            byte[] reply = new byte[4];
+            readFully(in, reply, 4);
+            if (reply[0] != 0x05 || reply[1] != 0x00) return -1;
+
+            int skip;
+            if (reply[3] == 0x01) {
+                skip = 6;
+            } else if (reply[3] == 0x04) {
+                skip = 18;
+            } else if (reply[3] == 0x03) {
+                byte[] len = new byte[1];
+                readFully(in, len, 1);
+                skip = (len[0] & 0xFF) + 2;
+            } else {
+                return -1;
+            }
+            readFully(in, new byte[skip], skip);
+
+            return (int) (System.currentTimeMillis() - t0);
+        } catch (Exception e) {
+            return -1;
+        } finally {
+            try { s.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private static void readFully(InputStream in, byte[] buf, int len) throws IOException {
+        int off = 0;
+        while (off < len) {
+            int n = in.read(buf, off, len - off);
+            if (n < 0) throw new IOException("Unexpected end of stream");
+            off += n;
+        }
     }
 
     private synchronized void stopVpn() {

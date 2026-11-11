@@ -245,7 +245,7 @@
 
                             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                 <TextBlock Text="App Routing (Split Tunnel)" Foreground="#FFFFFF" FontSize="12" FontWeight="Bold"/>
-                                <TextBlock x:Name="tvAppRoutingSub" Text="All PC apps routed (click to customize)" Foreground="#FFB800" FontSize="10"/>
+                                <TextBlock x:Name="tvAppRoutingSub" Text="All apps using system proxy (click to customize)" Foreground="#FFB800" FontSize="10"/>
                             </StackPanel>
 
                             <TextBlock Grid.Column="2" Text="CHANGE ›" Foreground="#FFB800" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
@@ -285,7 +285,7 @@
                         <TextBlock Text="Choose which applications route through BeeVPN." Foreground="#888888" FontSize="10" Margin="0,2,0,12"/>
 
                         <!-- Radio Options -->
-                        <RadioButton x:Name="rbFullTunnel" GroupName="TunnelMode" Content="Route all PC applications (Default)" Foreground="#FFFFFF" FontSize="11" Margin="0,0,0,6" Checked="RbTunnelMode_Changed"/>
+                        <RadioButton x:Name="rbFullTunnel" GroupName="TunnelMode" Content="Route all apps that use the system proxy (Default)" Foreground="#FFFFFF" FontSize="11" Margin="0,0,0,6" Checked="RbTunnelMode_Changed"/>
                         <RadioButton x:Name="rbSplitTunnel" GroupName="TunnelMode" Content="Route specific apps only (Split Tunnel)" Foreground="#FFFFFF" FontSize="11" Margin="0,0,0,10" Checked="RbTunnelMode_Changed"/>
 
                         <!-- Split Tunnel Panel with 1-Click Launchers -->

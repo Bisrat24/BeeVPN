@@ -17,6 +17,7 @@ namespace BeeVPN
     {
         private readonly TunnelProcessManager _tunnelManager;
         private readonly DispatcherTimer _statsTimer;
+        private readonly DispatcherTimer _connectTimeoutTimer;
         private DateTime _connectTime;
         private int _selectedMode = 0; // 0 = Psiphon, 1 = Cloudflare
         private bool _isConnected = false;
@@ -53,6 +54,12 @@ namespace BeeVPN
                 Interval = TimeSpan.FromSeconds(1)
             };
             _statsTimer.Tick += StatsTimer_Tick;
+
+            _connectTimeoutTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(90)
+            };
+            _connectTimeoutTimer.Tick += ConnectTimeoutTimer_Tick;
 
             _isSplitTunnel = SplitTunnelManager.Settings.IsSplitTunnel;
             UpdateSplitTunnelUi();
@@ -111,9 +118,10 @@ namespace BeeVPN
                 }
             };
 
-            // Clean up any orphaned system proxy or DNS from a previous crash
+            // Recover Internet Settings captured before a crash or forced termination
+            ProxyManager.RestoreBackupIfAny();
+            DnsManager.RestoreBackupIfAny();
             ProxyManager.CleanOrphanedProxy();
-            DnsManager.ResetDns();
 
             UpdateUiState();
             AppendLog("CORE", "BeeVPN Windows Edition initialized.");
@@ -228,7 +236,9 @@ namespace BeeVPN
             _rxBytes = 0;
             _txBytes = 0;
             _measuredLatency = -1;
-            _connectTime = DateTime.Now;
+            _connectTime = DateTime.MinValue;
+            _lastLatencyCheck = DateTime.MinValue;
+            _connectTimeoutTimer.Stop();
 
             UpdateUiState();
 
@@ -236,6 +246,7 @@ namespace BeeVPN
             {
                 AppendLog("CORE", "Starting Psiphon Circumvention Mode (Speed Optimized)...");
                 _tunnelManager.Start();
+                _connectTimeoutTimer.Start();
             }
             else
             {
@@ -247,6 +258,7 @@ namespace BeeVPN
                 {
                     _isConnected = true;
                     _isConnecting = false;
+                    _connectTime = DateTime.Now;
                     _statsTimer.Start();
                     AppendLog("DNS", "CONNECTED! Fast DNS active via Cloudflare 1.1.1.1 (general traffic direct).");
                     UpdateUiState();
@@ -270,6 +282,7 @@ namespace BeeVPN
         {
             bool wasActive = _isConnected || _isConnecting;
             _isIntentionalStop = true;
+            _connectTimeoutTimer.Stop();
             AppendLog("CORE", "Disconnecting tunnel...");
 
             if (_selectedMode == 0)
@@ -305,16 +318,19 @@ namespace BeeVPN
         {
             Dispatcher.Invoke(() =>
             {
-                if (_isConnected) return;
+                if (_isConnected || _isIntentionalStop) return;
+                _connectTimeoutTimer.Stop();
                 _isConnected = true;
                 _isConnecting = false;
                 _isIntentionalStop = false;
+                _connectTime = DateTime.Now;
+                _lastLatencyCheck = DateTime.MinValue;
                 _statsTimer.Start();
 
                 if (!_isSplitTunnel && _tunnelManager.HttpPort > 0)
                 {
                     ProxyManager.EnableSystemProxy("127.0.0.1", _tunnelManager.HttpPort);
-                    AppendLog("PROXY", $"Windows System Proxy active on 127.0.0.1:{_tunnelManager.HttpPort} (All PC Apps)");
+                    AppendLog("PROXY", $"Windows System Proxy active on 127.0.0.1:{_tunnelManager.HttpPort} (apps that honor system proxy settings)");
                 }
                 else
                 {
@@ -384,40 +400,129 @@ namespace BeeVPN
 
         private void StatsTimer_Tick(object? sender, EventArgs e)
         {
-            var elapsed = DateTime.Now - _connectTime;
-            tvDuration.Text = string.Format("{0:D2}:{1:D2}:{2:D2}", (int)elapsed.TotalHours, elapsed.Minutes, elapsed.Seconds);
+            if (_connectTime != DateTime.MinValue)
+            {
+                var elapsed = DateTime.Now - _connectTime;
+                tvDuration.Text = string.Format("{0:D2}:{1:D2}:{2:D2}", (int)elapsed.TotalHours, elapsed.Minutes, elapsed.Seconds);
+            }
 
             if ((DateTime.Now - _lastLatencyCheck).TotalSeconds >= 5)
             {
                 _lastLatencyCheck = DateTime.Now;
+                int mode = _selectedMode;
+                int socksPort = _tunnelManager.SocksPort;
                 System.Threading.Tasks.Task.Run(() =>
                 {
-                    try
+                    int ms = mode == 0
+                        ? (socksPort > 0 ? ProbeLatencyViaSocks(socksPort) : -1)
+                        : ProbeDirectLatency();
+
+                    Dispatcher.Invoke(() =>
                     {
-                        var sw = Stopwatch.StartNew();
-                        using var tcp = new System.Net.Sockets.TcpClient();
-                        var ar = tcp.BeginConnect("1.1.1.1", 53, null, null);
-                        if (ar.AsyncWaitHandle.WaitOne(1500))
+                        _measuredLatency = ms;
+                        if (_isConnected)
                         {
-                            tcp.EndConnect(ar);
-                            sw.Stop();
-                            int ms = (int)sw.ElapsedMilliseconds;
-                            Dispatcher.Invoke(() =>
-                            {
-                                _measuredLatency = ms;
-                                if (_isConnected)
-                                {
-                                    tvLatency.Text = $"● {_measuredLatency} ms";
-                                }
-                            });
+                            tvLatency.Text = ms > 0 ? $"● {ms} ms" : "○ Measuring";
                         }
-                    }
-                    catch
-                    {
-                        // Ignore latency probe failures
-                    }
+                    });
                 });
             }
+        }
+
+        private void ConnectTimeoutTimer_Tick(object? sender, EventArgs e)
+        {
+            _connectTimeoutTimer.Stop();
+            if (!_isConnecting) return;
+
+            AppendLog("ERROR", "Connection timed out after 90 seconds. Check your network and try again.");
+            DisconnectVpn();
+            _notifyIcon.ShowBalloonTip(
+                3000,
+                "BeeVPN Connection Failed",
+                "Could not reach the Psiphon network. Try again or switch to Cloudflare DNS mode.",
+                Forms.ToolTipIcon.Warning
+            );
+        }
+
+        // BeeVPN itself is not inside the tunnel, so a direct socket would report
+        // pre-tunnel latency; measure through the local SOCKS proxy instead.
+        private static int ProbeLatencyViaSocks(int socksPort)
+        {
+            try
+            {
+                var sw = Stopwatch.StartNew();
+                using var tcp = new System.Net.Sockets.TcpClient();
+                if (!tcp.ConnectAsync("127.0.0.1", socksPort).Wait(3000)) return -1;
+
+                using var stream = tcp.GetStream();
+                stream.ReadTimeout = 3000;
+                stream.WriteTimeout = 3000;
+
+                stream.Write(new byte[] { 0x05, 0x01, 0x00 }, 0, 3);
+                var greeting = ReadExactly(stream, 2);
+                if (greeting[0] != 0x05 || greeting[1] != 0x00) return -1;
+
+                // CONNECT 1.1.1.1:443
+                stream.Write(new byte[] { 0x05, 0x01, 0x00, 0x01, 1, 1, 1, 1, 0x01, 0xBB }, 0, 10);
+                var reply = ReadExactly(stream, 4);
+                if (reply[0] != 0x05 || reply[1] != 0x00) return -1;
+
+                int skip;
+                if (reply[3] == 0x01)
+                {
+                    skip = 6;
+                }
+                else if (reply[3] == 0x04)
+                {
+                    skip = 18;
+                }
+                else if (reply[3] == 0x03)
+                {
+                    var len = ReadExactly(stream, 1);
+                    skip = len[0] + 2;
+                }
+                else
+                {
+                    return -1;
+                }
+
+                ReadExactly(stream, skip);
+                sw.Stop();
+                return (int)sw.ElapsedMilliseconds;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        private static int ProbeDirectLatency()
+        {
+            try
+            {
+                var sw = Stopwatch.StartNew();
+                using var tcp = new System.Net.Sockets.TcpClient();
+                if (!tcp.ConnectAsync("1.1.1.1", 53).Wait(1500)) return -1;
+                sw.Stop();
+                return (int)sw.ElapsedMilliseconds;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        private static byte[] ReadExactly(Stream stream, int count)
+        {
+            var buffer = new byte[count];
+            int read = 0;
+            while (read < count)
+            {
+                int n = stream.Read(buffer, read, count - read);
+                if (n <= 0) throw new IOException("Unexpected end of stream");
+                read += n;
+            }
+            return buffer;
         }
 
         #region Split Tunneling & App Routing
@@ -450,7 +555,7 @@ namespace BeeVPN
             UpdateSplitTunnelUi();
             dialogSplitTunnel.Visibility = Visibility.Collapsed;
 
-            AppendLog("UI", $"App routing updated: {(_isSplitTunnel ? "Split Tunnel (Specific apps only)" : "Full Tunnel (All PC apps)")}");
+            AppendLog("UI", $"App routing updated: {(_isSplitTunnel ? "Split Tunnel (Specific apps only)" : "Full Tunnel (all apps that use the system proxy)")}");
 
             if (_isConnected && _selectedMode == 0)
             {
@@ -478,7 +583,7 @@ namespace BeeVPN
                 }
                 else
                 {
-                    tvAppRoutingSub.Text = "All PC apps routed (click to customize)";
+                    tvAppRoutingSub.Text = "All apps using system proxy (click to customize)";
                     tvAppRoutingSub.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xB8, 0x00));
                 }
             }
@@ -648,7 +753,7 @@ namespace BeeVPN
                 tvHint.Text = _selectedMode == 0 
                     ? (_isSplitTunnel ? "Split tunnel active: selected apps routed" : "Traffic is encrypted and securely routed")
                     : "DNS queries routed via 1.1.1.1 (general traffic direct)";
-                tvLatency.Text = _measuredLatency > 0 ? $"● {_measuredLatency} ms" : "● Measuring...";
+                tvLatency.Text = _measuredLatency > 0 ? $"● {_measuredLatency} ms" : "○ Measuring";
                 tvLatency.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
 
                 UpdatePowerButton(true, false);
