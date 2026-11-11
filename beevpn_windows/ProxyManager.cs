@@ -56,8 +56,23 @@ namespace BeeVPN
                 using var key = Registry.CurrentUser.OpenSubKey(RegKeyPath, true);
                 if (key != null)
                 {
-                    key.SetValue("ProxyEnable", 0, RegistryValueKind.DWord);
-                    key.DeleteValue("ProxyServer", false);
+                    if (_isBackedUp)
+                    {
+                        key.SetValue("ProxyEnable", _originalProxyEnable ? 1 : 0, RegistryValueKind.DWord);
+                        if (!string.IsNullOrEmpty(_originalProxyServer))
+                        {
+                            key.SetValue("ProxyServer", _originalProxyServer, RegistryValueKind.String);
+                        }
+                        else
+                        {
+                            key.DeleteValue("ProxyServer", false);
+                        }
+                    }
+                    else
+                    {
+                        key.SetValue("ProxyEnable", 0, RegistryValueKind.DWord);
+                        key.DeleteValue("ProxyServer", false);
+                    }
                     RefreshWinINet();
                 }
                 _isCurrentlyEnabled = false;
@@ -65,6 +80,30 @@ namespace BeeVPN
             catch (Exception ex)
             {
                 Debug.WriteLine($"Failed to disable Windows proxy: {ex.Message}");
+            }
+        }
+
+        public static void CleanOrphanedProxy()
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(RegKeyPath, true);
+                if (key != null)
+                {
+                    string server = (string?)key.GetValue("ProxyServer") ?? "";
+                    int enabled = (int?)key.GetValue("ProxyEnable") ?? 0;
+                    if (enabled == 1 && server.StartsWith("127.0.0.1:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        key.SetValue("ProxyEnable", 0, RegistryValueKind.DWord);
+                        key.DeleteValue("ProxyServer", false);
+                        RefreshWinINet();
+                        Debug.WriteLine("Cleaned orphaned loopback proxy from registry.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"CleanOrphanedProxy error: {ex.Message}");
             }
         }
 

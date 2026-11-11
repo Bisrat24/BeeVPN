@@ -22,9 +22,12 @@ namespace BeeVPN
         private bool _isConnected = false;
         private bool _isConnecting = false;
         private bool _isSplitTunnel = false;
+        private bool _isIntentionalStop = false;
 
         private long _rxBytes = 0;
         private long _txBytes = 0;
+        private int _measuredLatency = -1;
+        private DateTime _lastLatencyCheck = DateTime.MinValue;
 
         // System Tray Components
         private readonly Forms.NotifyIcon _notifyIcon;
@@ -107,6 +110,10 @@ namespace BeeVPN
                     RestoreFromTray();
                 }
             };
+
+            // Clean up any orphaned system proxy or DNS from a previous crash
+            ProxyManager.CleanOrphanedProxy();
+            DnsManager.ResetDns();
 
             UpdateUiState();
             AppendLog("CORE", "BeeVPN Windows Edition initialized.");
@@ -194,10 +201,10 @@ namespace BeeVPN
             }
             else
             {
-                tvServerTitle.Text = "Cloudflare Anycast (Auto)";
-                tvServerSub.Text = "Ultra-fast direct encrypted tunnel";
+                tvServerTitle.Text = "Cloudflare DNS (1.1.1.1)";
+                tvServerSub.Text = "Fast public DNS resolver (bypasses DNS filtering)";
                 cardAppRouting.Visibility = Visibility.Collapsed;
-                AppendLog("UI", "Selected mode: Cloudflare WARP (Fast Direct)");
+                AppendLog("UI", "Selected mode: Cloudflare DNS (1.1.1.1 Fast)");
             }
         }
 
@@ -217,8 +224,10 @@ namespace BeeVPN
         {
             _isConnecting = true;
             _isConnected = false;
+            _isIntentionalStop = false;
             _rxBytes = 0;
             _txBytes = 0;
+            _measuredLatency = -1;
             _connectTime = DateTime.Now;
 
             UpdateUiState();
@@ -230,8 +239,8 @@ namespace BeeVPN
             }
             else
             {
-                AppendLog("CORE", "Starting Cloudflare WARP Mode (Direct Fast Tunnel)...");
-                AppendLog("WARP", "Configuring network DNS resolvers (1.1.1.1, 1.0.0.1)...");
+                AppendLog("CORE", "Starting Cloudflare DNS Mode (Fast DNS Resolver)...");
+                AppendLog("DNS", "Configuring network DNS resolvers (1.1.1.1, 1.0.0.1)...");
 
                 bool ok = DnsManager.SetCloudflareDns();
                 if (ok)
@@ -239,12 +248,12 @@ namespace BeeVPN
                     _isConnected = true;
                     _isConnecting = false;
                     _statsTimer.Start();
-                    AppendLog("WARP", "CONNECTED! Ultra-fast direct tunnel active (DNS: 1.1.1.1).");
+                    AppendLog("DNS", "CONNECTED! Fast DNS active via Cloudflare 1.1.1.1 (general traffic direct).");
                     UpdateUiState();
                     _notifyIcon.ShowBalloonTip(
                         3000,
-                        "BeeVPN Connected",
-                        "Encrypted tunnel is now online (Cloudflare WARP - 1.1.1.1).",
+                        "BeeVPN DNS Active",
+                        "Fast DNS resolver is active (1.1.1.1). General traffic is direct.",
                         Forms.ToolTipIcon.Info
                     );
                 }
@@ -260,6 +269,7 @@ namespace BeeVPN
         private void DisconnectVpn()
         {
             bool wasActive = _isConnected || _isConnecting;
+            _isIntentionalStop = true;
             AppendLog("CORE", "Disconnecting tunnel...");
 
             if (_selectedMode == 0)
@@ -274,6 +284,7 @@ namespace BeeVPN
 
             _isConnected = false;
             _isConnecting = false;
+            _measuredLatency = -1;
             _statsTimer.Stop();
 
             AppendLog("STATUS", "Tunnel disconnected. Device traffic restored to normal.");
@@ -294,8 +305,10 @@ namespace BeeVPN
         {
             Dispatcher.Invoke(() =>
             {
+                if (_isConnected) return;
                 _isConnected = true;
                 _isConnecting = false;
+                _isIntentionalStop = false;
                 _statsTimer.Start();
 
                 if (!_isSplitTunnel && _tunnelManager.HttpPort > 0)
@@ -354,7 +367,7 @@ namespace BeeVPN
         {
             Dispatcher.Invoke(() =>
             {
-                if (_isConnected)
+                if (!_isIntentionalStop && (_isConnected || _isConnecting))
                 {
                     DisconnectVpn();
                 }
@@ -373,6 +386,38 @@ namespace BeeVPN
         {
             var elapsed = DateTime.Now - _connectTime;
             tvDuration.Text = string.Format("{0:D2}:{1:D2}:{2:D2}", (int)elapsed.TotalHours, elapsed.Minutes, elapsed.Seconds);
+
+            if ((DateTime.Now - _lastLatencyCheck).TotalSeconds >= 5)
+            {
+                _lastLatencyCheck = DateTime.Now;
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    try
+                    {
+                        var sw = Stopwatch.StartNew();
+                        using var tcp = new System.Net.Sockets.TcpClient();
+                        var ar = tcp.BeginConnect("1.1.1.1", 53, null, null);
+                        if (ar.AsyncWaitHandle.WaitOne(1500))
+                        {
+                            tcp.EndConnect(ar);
+                            sw.Stop();
+                            int ms = (int)sw.ElapsedMilliseconds;
+                            Dispatcher.Invoke(() =>
+                            {
+                                _measuredLatency = ms;
+                                if (_isConnected)
+                                {
+                                    tvLatency.Text = $"● {_measuredLatency} ms";
+                                }
+                            });
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore latency probe failures
+                    }
+                });
+            }
         }
 
         #region Split Tunneling & App Routing
@@ -575,6 +620,14 @@ namespace BeeVPN
             string time = DateTime.Now.ToString("HH:mm:ss");
             string line = $"[{time}] {tag,-7} {msg}";
             txtLogs.AppendText(line + Environment.NewLine);
+            if (txtLogs.LineCount > 1000)
+            {
+                int firstLineEnd = txtLogs.Text.IndexOf(Environment.NewLine);
+                if (firstLineEnd >= 0)
+                {
+                    txtLogs.Text = txtLogs.Text.Substring(firstLineEnd + Environment.NewLine.Length);
+                }
+            }
             txtLogs.ScrollToEnd();
         }
 
@@ -586,22 +639,24 @@ namespace BeeVPN
             {
                 borderStatusBadge.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x0E, 0x2E, 0x1A));
                 borderStatusBadge.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1B, 0x5E, 0x36));
-                tvStatusBadge.Text = "●  CONNECTED";
+                tvStatusBadge.Text = _selectedMode == 0 ? "●  CONNECTED" : "●  DNS ACTIVE";
                 tvStatusBadge.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
 
-                tvConnectionState.Text = _selectedMode == 0 ? "PSIPHON ACTIVE" : "CLOUDFLARE ACTIVE";
+                tvConnectionState.Text = _selectedMode == 0 ? "PSIPHON ACTIVE" : "CLOUDFLARE DNS ACTIVE";
                 tvConnectionState.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
 
-                tvHint.Text = "Traffic is encrypted and securely routed";
-                tvLatency.Text = "● 24 ms";
+                tvHint.Text = _selectedMode == 0 
+                    ? (_isSplitTunnel ? "Split tunnel active: selected apps routed" : "Traffic is encrypted and securely routed")
+                    : "DNS queries routed via 1.1.1.1 (general traffic direct)";
+                tvLatency.Text = _measuredLatency > 0 ? $"● {_measuredLatency} ms" : "● Measuring...";
                 tvLatency.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
 
                 UpdatePowerButton(true, false);
 
                 // Update System Tray
-                _notifyIcon.Text = $"BeeVPN: Connected ({(_selectedMode == 0 ? "Psiphon" : "WARP")})";
+                _notifyIcon.Text = $"BeeVPN: {(_selectedMode == 0 ? "Connected (Psiphon)" : "DNS Active (1.1.1.1)")}";
                 _menuItemToggleConnect.Text = "Disconnect";
-                _menuItemStatus.Text = "Status: Connected (Protected)";
+                _menuItemStatus.Text = $"Status: {(_selectedMode == 0 ? "Connected (Psiphon)" : "DNS Active (1.1.1.1)")}";
             }
             else if (_isConnecting)
             {
@@ -610,10 +665,10 @@ namespace BeeVPN
                 tvStatusBadge.Text = "⏳  CONNECTING...";
                 tvStatusBadge.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xB8, 0x00));
 
-                tvConnectionState.Text = "SECURING TUNNEL...";
+                tvConnectionState.Text = _selectedMode == 0 ? "SECURING TUNNEL..." : "CONFIGURING DNS...";
                 tvConnectionState.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xB8, 0x00));
 
-                tvHint.Text = "Negotiating handshake with server fleet...";
+                tvHint.Text = _selectedMode == 0 ? "Negotiating handshake with server fleet..." : "Applying Cloudflare 1.1.1.1 DNS resolvers...";
                 tvLatency.Text = "○ Probing";
                 tvLatency.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xB8, 0x00));
 

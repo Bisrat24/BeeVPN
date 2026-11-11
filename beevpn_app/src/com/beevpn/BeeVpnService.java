@@ -48,6 +48,7 @@ public class BeeVpnService extends VpnService {
     public static final String EXTRA_DURATION = "extra_duration";
     public static final String EXTRA_RX_BYTES = "extra_rx_bytes";
     public static final String EXTRA_TX_BYTES = "extra_tx_bytes";
+    public static final String EXTRA_LATENCY = "extra_latency";
 
     private static final String CHANNEL_ID = "beevpn_channel";
     private static final String CHANNEL_ALERTS_ID = "beevpn_alerts";
@@ -65,10 +66,15 @@ public class BeeVpnService extends VpnService {
 
     private PsiphonTunnel mPsiphonTunnel = null;
     private volatile int mSocksPort = 0;
+    private volatile boolean mIsTunnelConnected = false;
+    private Runnable mConnectTimeoutRunnable = null;
+    private java.util.concurrent.ExecutorService mDnsExecutor = null;
 
     private long mStartTime = 0;
-    private long mRxBytes = 0;
-    private long mTxBytes = 0;
+    private final java.util.concurrent.atomic.AtomicLong mRxBytes = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong mTxBytes = new java.util.concurrent.atomic.AtomicLong(0);
+    private volatile int mMeasuredLatencyMs = -1;
+    private long mLastLatencyCheck = 0;
     private String mLastStatusMsg = "Ready";
 
     private Handler mHandler;
@@ -134,24 +140,24 @@ public class BeeVpnService extends VpnService {
         startForeground(NOTIFICATION_ID, buildNotification("BeeVPN Tunnel", "Securing connection..."));
 
         mStartTime = System.currentTimeMillis();
-        mRxBytes = 0;
-        mTxBytes = 0;
+        mRxBytes.set(0);
+        mTxBytes.set(0);
         mShouldStop = false;
 
         if (mode == MODE_PSIPHON) {
             LogManager.log("CORE", "Starting Psiphon Circumvention Mode (Global Bypass)...");
             startPsiphonMode();
         } else {
-            LogManager.log("CORE", "Starting Cloudflare WARP Mode (Direct Fast Tunnel)...");
-            startCloudflareMode();
+            LogManager.log("CORE", "Starting Cloudflare DNS Mode (Fast Public DNS)...");
+            startCloudflareDnsMode();
         }
     }
 
-    private void startCloudflareMode() {
+    private void startCloudflareDnsMode() {
         try {
-            LogManager.log("WARP", "Building VPN tunnel interface (10.8.0.2)...");
+            LogManager.log("DNS", "Building DNS resolver VPN interface (10.8.0.2)...");
             Builder builder = new Builder();
-            builder.setSession("BeeVPN Cloudflare WARP");
+            builder.setSession("BeeVPN Cloudflare DNS");
             builder.addAddress("10.8.0.2", 24);
             builder.addDnsServer("1.1.1.1");
             builder.addDnsServer("1.0.0.1");
@@ -169,38 +175,35 @@ public class BeeVpnService extends VpnService {
 
             sIsRunning = true;
             sIsConnecting = false;
-            mLastStatusMsg = "Cloudflare WARP Active";
-            LogManager.log("WARP", "CONNECTED! Ultra-fast direct tunnel active (DNS: 1.1.1.1).");
-            updateNotification("BeeVPN Connected", "Protected via Cloudflare WARP");
+            mLastStatusMsg = "Cloudflare DNS Active";
+            LogManager.log("DNS", "ACTIVE! Fast DNS resolver active (1.1.1.1). General device traffic is direct.");
+            updateNotification("BeeVPN DNS Active", "DNS via 1.1.1.1 (General traffic direct)");
             broadcastStatus(true, false, mLastStatusMsg);
 
             startDnsWorker();
             startStatsTicker();
         } catch (Exception e) {
-            LogManager.log("ERROR", "Failed to start Cloudflare mode: " + e.getMessage());
+            LogManager.log("ERROR", "Failed to start Cloudflare DNS mode: " + e.getMessage());
             stopVpn();
         }
     }
 
     private void startDnsWorker() {
+        mDnsExecutor = java.util.concurrent.Executors.newFixedThreadPool(4);
         mWorkerThread = new Thread(() -> {
             FileInputStream in = new FileInputStream(mVpnInterface.getFileDescriptor());
             FileOutputStream out = new FileOutputStream(mVpnInterface.getFileDescriptor());
             byte[] packet = new byte[32768];
 
-            DatagramSocket socket = null;
             try {
-                socket = new DatagramSocket();
-                protect(socket); // Exempt from VPN tunnel loop
-                socket.setSoTimeout(4000);
                 InetAddress dnsServer = InetAddress.getByName("1.1.1.1");
-                LogManager.log("WARP", "DNS worker active. Forwarding queries to 1.1.1.1");
+                LogManager.log("DNS", "DNS worker active. Forwarding queries to 1.1.1.1 via parallel pool.");
 
                 while (!mShouldStop) {
                     int length = in.read(packet);
                     if (length <= 0) continue;
 
-                    mTxBytes += length;
+                    mTxBytes.addAndGet(length);
 
                     int version = (packet[0] >> 4) & 0x0F;
                     int protocol = packet[9] & 0xFF;
@@ -216,31 +219,47 @@ public class BeeVpnService extends VpnService {
                             byte[] query = new byte[dnsLen];
                             System.arraycopy(packet, ipHdrLen + 8, query, 0, dnsLen);
 
-                            DatagramPacket outPacket = new DatagramPacket(query, query.length, dnsServer, 53);
-                            socket.send(outPacket);
+                            byte[] rawPacketCopy = new byte[ipHdrLen + 8];
+                            System.arraycopy(packet, 0, rawPacketCopy, 0, rawPacketCopy.length);
 
-                            byte[] respBuf = new byte[4096];
-                            DatagramPacket inPacket = new DatagramPacket(respBuf, respBuf.length);
-                            socket.receive(inPacket);
+                            mDnsExecutor.execute(() -> {
+                                DatagramSocket socket = null;
+                                try {
+                                    socket = new DatagramSocket();
+                                    protect(socket);
+                                    socket.setSoTimeout(3000);
 
-                            int respDnsLen = inPacket.getLength();
-                            mRxBytes += respDnsLen;
+                                    DatagramPacket outPacket = new DatagramPacket(query, query.length, dnsServer, 53);
+                                    socket.send(outPacket);
 
-                            byte[] respIpPacket = buildUdpResponse(
-                                    packet, ipHdrLen,
-                                    dstPort, srcPort,
-                                    respBuf, respDnsLen
-                            );
-                            out.write(respIpPacket);
+                                    byte[] respBuf = new byte[4096];
+                                    DatagramPacket inPacket = new DatagramPacket(respBuf, respBuf.length);
+                                    socket.receive(inPacket);
+
+                                    int respDnsLen = inPacket.getLength();
+                                    mRxBytes.addAndGet(respDnsLen);
+
+                                    byte[] respIpPacket = buildUdpResponse(
+                                            rawPacketCopy, ipHdrLen,
+                                            dstPort, srcPort,
+                                            respBuf, respDnsLen
+                                    );
+                                    synchronized (out) {
+                                        out.write(respIpPacket);
+                                    }
+                                } catch (Exception ignored) {
+                                } finally {
+                                    if (socket != null) socket.close();
+                                }
+                            });
                         }
                     }
                 }
             } catch (Exception e) {
                 if (!mShouldStop) {
-                    LogManager.log("WARP", "Worker error: " + e.getMessage());
+                    LogManager.log("DNS", "Worker error: " + e.getMessage());
                 }
             } finally {
-                if (socket != null) socket.close();
                 try {
                     in.close();
                     out.close();
@@ -303,10 +322,24 @@ public class BeeVpnService extends VpnService {
         try {
             sIsConnecting = true;
             sIsRunning = false;
+            mIsTunnelConnected = false;
+            mSocksPort = 0;
             mLastStatusMsg = "Connecting to Psiphon...";
             LogManager.log("PSIPHON", "Initializing Psiphon Tunnel Core v495...");
             updateNotification("BeeVPN Connecting", "Connecting to Psiphon network...");
             broadcastStatus(false, true, mLastStatusMsg);
+
+            // Connect timeout watchdog (75s)
+            if (mConnectTimeoutRunnable != null) {
+                mHandler.removeCallbacks(mConnectTimeoutRunnable);
+            }
+            mConnectTimeoutRunnable = () -> {
+                if (sIsConnecting && !sIsRunning) {
+                    LogManager.log("WARN", "Connection attempt timed out after 75s. Resetting.");
+                    stopVpn();
+                }
+            };
+            mHandler.postDelayed(mConnectTimeoutRunnable, 75000);
 
             mPsiphonTunnel = PsiphonTunnel.newPsiphonTunnel(new PsiphonTunnel.HostService() {
                 @Override
@@ -327,7 +360,6 @@ public class BeeVpnService extends VpnService {
                         config.put("EmitDiagnosticNotices", true);
                         config.put("EmitDiagnosticNetworkParameters", true);
                         config.put("EmitBytesTransferred", true);
-                        config.put("DisableTimeouts", true);
                         config.put("NetworkLatencyMultiplierLambda", 0.05);
 
                         // Official Psiphon verified server pools and cryptographic keys
@@ -394,14 +426,8 @@ public class BeeVpnService extends VpnService {
                             String p = d.optString("protocol", "OSSH");
                             String sni = d.optString("tlsOSSHSNIServerName", "");
                             LogManager.log("ACTIVE", "Connected to " + r + " server via " + p + (!sni.isEmpty() ? " (" + sni + ")" : ""));
-                            if (mSocksPort > 0) {
-                                establishPsiphonVpn(mSocksPort);
-                            }
                         } else if ("ActiveTunnel".equals(noticeType) || "Tunnels".equals(noticeType)) {
                             LogManager.log("STATUS", "Encrypted tunnel online and routing traffic.");
-                            if (mSocksPort > 0) {
-                                establishPsiphonVpn(mSocksPort);
-                            }
                         } else if ("CandidateServers".equals(noticeType)) {
                             JSONObject d = new JSONObject(jsonData);
                             int count = d.optInt("count", 0);
@@ -436,6 +462,7 @@ public class BeeVpnService extends VpnService {
                 public void onListeningSocksProxyPort(int port) {
                     mSocksPort = port;
                     LogManager.log("SOCKS", "Psiphon SOCKS proxy ready on port " + port);
+                    checkAndEstablishPsiphonVpn();
                 }
 
                 @Override
@@ -457,19 +484,21 @@ public class BeeVpnService extends VpnService {
                 public void onConnected() {
                     sIsRunning = true;
                     sIsConnecting = false;
+                    mIsTunnelConnected = true;
+                    if (mConnectTimeoutRunnable != null) {
+                        mHandler.removeCallbacks(mConnectTimeoutRunnable);
+                    }
                     mLastStatusMsg = "Psiphon Connected";
                     LogManager.log("STATUS", "CONNECTED! Encrypted tunnel online.");
                     updateNotification("BeeVPN Connected", "Connected via Psiphon Network");
-                    if (mSocksPort > 0) {
-                        establishPsiphonVpn(mSocksPort);
-                    }
+                    checkAndEstablishPsiphonVpn();
                     broadcastStatus(true, false, mLastStatusMsg);
                 }
 
                 @Override
                 public void onBytesTransferred(long sent, long received) {
-                    mTxBytes += sent;
-                    mRxBytes += received;
+                    mTxBytes.addAndGet(sent);
+                    mRxBytes.addAndGet(received);
                 }
             });
 
@@ -481,8 +510,14 @@ public class BeeVpnService extends VpnService {
 
         } catch (Exception e) {
             LogManager.log("ERROR", "Psiphon startup exception: " + e.getMessage());
-            LogManager.log("WARN", "Falling back to Cloudflare WARP mode...");
-            startCloudflareMode();
+            LogManager.log("WARN", "Falling back to Cloudflare DNS mode...");
+            startCloudflareDnsMode();
+        }
+    }
+
+    private synchronized void checkAndEstablishPsiphonVpn() {
+        if (mIsTunnelConnected && mSocksPort > 0 && mVpnInterface == null && !mShouldStop) {
+            establishPsiphonVpn(mSocksPort);
         }
     }
 
@@ -490,14 +525,21 @@ public class BeeVpnService extends VpnService {
         if (mVpnInterface != null) return;
 
         try {
-            LogManager.log("VPN", "Establishing TUN interface (10.0.0.1/24) for tun2socks...");
+            LogManager.log("VPN", "Establishing TUN interface (10.0.0.1/24) for tun2socks (MTU: 1400)...");
             Builder builder = new Builder();
             builder.setSession("BeeVPN Psiphon Tunnel");
             builder.addAddress("10.0.0.1", 24);
             builder.addRoute("0.0.0.0", 0);
             builder.addDnsServer("10.0.0.2");
+
+            // Prevent IPv6 leaks by blackholing IPv6 into TUN interface
+            try {
+                builder.addAddress("fd00::1", 128);
+                builder.addRoute("::", 0);
+            } catch (Exception ignored) {}
+
             applyAppRouting(builder);
-            builder.setMtu(1500);
+            builder.setMtu(1400);
 
             mVpnInterface = builder.establish();
             if (mVpnInterface == null) {
@@ -517,7 +559,7 @@ public class BeeVpnService extends VpnService {
                     LogManager.log("TUN2S", "Starting tun2socks bridge to 127.0.0.1:" + socksPort);
                     Tun2SocksJniLoader.runTun2Socks(
                             mVpnInterface.detachFd(),
-                            1500,
+                            1400,
                             "10.0.0.2",
                             "255.255.255.0",
                             null,
@@ -528,6 +570,11 @@ public class BeeVpnService extends VpnService {
                     LogManager.log("TUN2S", "tun2socks exited.");
                 } catch (Throwable t) {
                     LogManager.log("ERROR", "tun2socks fatal error: " + t.getMessage());
+                } finally {
+                    if (!mShouldStop) {
+                        LogManager.log("WARN", "Tunnel bridge stopped unexpectedly.");
+                        mHandler.post(BeeVpnService.this::stopVpn);
+                    }
                 }
             }, "BeeVpn-Tun2Socks");
             mTun2SocksThread.start();
@@ -612,9 +659,27 @@ public class BeeVpnService extends VpnService {
             @Override
             public void run() {
                 if (!sIsRunning && !sIsConnecting) return;
+
+                // Live latency check to 1.1.1.1 every 5s while connected
+                if (sIsRunning && System.currentTimeMillis() - mLastLatencyCheck > 5000) {
+                    mLastLatencyCheck = System.currentTimeMillis();
+                    new Thread(() -> {
+                        try {
+                            long t0 = System.currentTimeMillis();
+                            java.net.Socket s = new java.net.Socket();
+                            s.connect(new java.net.InetSocketAddress("1.1.1.1", 53), 2000);
+                            s.close();
+                            mMeasuredLatencyMs = (int) (System.currentTimeMillis() - t0);
+                        } catch (Exception ignored) {
+                            mMeasuredLatencyMs = -1;
+                        }
+                    }, "BeeVpn-Ping").start();
+                }
+
                 broadcastStatus(sIsRunning, sIsConnecting, mLastStatusMsg);
                 if (sIsRunning) {
-                    String stats = "Protected (↓ " + formatBytes(mRxBytes) + "  •  ↑ " + formatBytes(mTxBytes) + ")";
+                    String prefix = sCurrentMode == MODE_PSIPHON ? "Protected" : "DNS Active";
+                    String stats = prefix + " (↓ " + formatBytes(mRxBytes.get()) + "  •  ↑ " + formatBytes(mTxBytes.get()) + ")";
                     updateNotification("BeeVPN Connected", stats);
                 }
                 mHandler.postDelayed(this, 1000);
@@ -626,8 +691,15 @@ public class BeeVpnService extends VpnService {
         boolean wasActive = sIsRunning || sIsConnecting;
         sIsRunning = false;
         sIsConnecting = false;
+        mIsTunnelConnected = false;
         mShouldStop = true;
         mSocksPort = 0;
+        mMeasuredLatencyMs = -1;
+
+        if (mConnectTimeoutRunnable != null) {
+            mHandler.removeCallbacks(mConnectTimeoutRunnable);
+            mConnectTimeoutRunnable = null;
+        }
 
         if (mPsiphonTunnel != null) {
             try {
@@ -640,6 +712,16 @@ public class BeeVpnService extends VpnService {
         try {
             Tun2SocksJniLoader.terminateTun2Socks();
         } catch (Throwable ignored) {}
+
+        if (mTun2SocksThread != null) {
+            mTun2SocksThread.interrupt();
+            mTun2SocksThread = null;
+        }
+
+        if (mDnsExecutor != null) {
+            mDnsExecutor.shutdownNow();
+            mDnsExecutor = null;
+        }
 
         if (mWorkerThread != null) {
             mWorkerThread.interrupt();
@@ -662,6 +744,13 @@ public class BeeVpnService extends VpnService {
         }
 
         stopSelf();
+    }
+
+    @Override
+    public void onRevoke() {
+        LogManager.log("VPN", "VPN permission revoked by system or user.");
+        stopVpn();
+        super.onRevoke();
     }
 
     private void showDisconnectedNotification() {
@@ -699,8 +788,9 @@ public class BeeVpnService extends VpnService {
         intent.putExtra(EXTRA_STATUS_MSG, msg);
         long durationSec = isConnected && mStartTime > 0 ? (System.currentTimeMillis() - mStartTime) / 1000 : 0;
         intent.putExtra(EXTRA_DURATION, durationSec);
-        intent.putExtra(EXTRA_RX_BYTES, mRxBytes);
-        intent.putExtra(EXTRA_TX_BYTES, mTxBytes);
+        intent.putExtra(EXTRA_RX_BYTES, mRxBytes.get());
+        intent.putExtra(EXTRA_TX_BYTES, mTxBytes.get());
+        intent.putExtra(EXTRA_LATENCY, mMeasuredLatencyMs);
         sendBroadcast(intent);
     }
 

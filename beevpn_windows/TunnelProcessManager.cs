@@ -120,12 +120,23 @@ namespace BeeVPN
 
         private async Task ReadStreamAsync(StreamReader reader, CancellationToken token)
         {
-            while (!token.IsCancellationRequested && !reader.EndOfStream)
+            try
             {
-                string? line = await reader.ReadLineAsync(token);
-                if (string.IsNullOrWhiteSpace(line)) continue;
+                while (!token.IsCancellationRequested && !reader.EndOfStream)
+                {
+                    string? line = await reader.ReadLineAsync(token);
+                    if (string.IsNullOrWhiteSpace(line)) continue;
 
-                ProcessJsonNotice(line);
+                    ProcessJsonNotice(line);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation requested on Stop
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ReadStreamAsync exception: {ex.Message}");
             }
         }
 
@@ -174,15 +185,21 @@ namespace BeeVPN
                         string crConn = data.TryGetProperty("region", out var rConn) ? rConn.GetString() ?? "Global" : "Global";
                         string cpConn = data.TryGetProperty("protocol", out var pConn) ? pConn.GetString() ?? "OSSH" : "OSSH";
                         Log("ACTIVE", $"Connected to {crConn} server via {cpConn}");
-                        IsTunnelActive = true;
-                        TunnelConnected?.Invoke(crConn, cpConn);
+                        if (!IsTunnelActive)
+                        {
+                            IsTunnelActive = true;
+                            TunnelConnected?.Invoke(crConn, cpConn);
+                        }
                         break;
 
                     case "ActiveTunnel":
                     case "Tunnels":
                         Log("STATUS", "Encrypted tunnel online and routing traffic.");
-                        IsTunnelActive = true;
-                        TunnelConnected?.Invoke("Auto", "Psiphon");
+                        if (!IsTunnelActive)
+                        {
+                            IsTunnelActive = true;
+                            TunnelConnected?.Invoke("Auto", "Psiphon");
+                        }
                         break;
 
                     case "BytesTransferred":
@@ -253,7 +270,6 @@ namespace BeeVPN
                 ["EmitDiagnosticNotices"] = true,
                 ["EmitDiagnosticNetworkParameters"] = true,
                 ["EmitBytesTransferred"] = true,
-                ["DisableTimeouts"] = true,
                 ["NetworkLatencyMultiplierLambda"] = 0.05,
                 ["RemoteServerListURLs"] = new object[]
                 {

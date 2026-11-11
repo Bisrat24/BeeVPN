@@ -72,6 +72,7 @@ public class MainActivity extends Activity {
     private int mSelectedMode = BeeVpnService.MODE_PSIPHON;
 
     private final List<AppEntry> mInstalledApps = new ArrayList<>();
+    private final List<Runnable> mPendingAppCallbacks = new ArrayList<>();
     private boolean mAppsLoaded = false;
     private boolean mIsLoadingApps = false;
 
@@ -112,7 +113,8 @@ public class MainActivity extends Activity {
                     long durationSec = intent.getLongExtra(BeeVpnService.EXTRA_DURATION, 0);
                     long rxBytes = intent.getLongExtra(BeeVpnService.EXTRA_RX_BYTES, 0);
                     long txBytes = intent.getLongExtra(BeeVpnService.EXTRA_TX_BYTES, 0);
-                    updateUiState(isConnected, isConnecting, statusMsg, durationSec, rxBytes, txBytes);
+                    int latency = intent.getIntExtra(BeeVpnService.EXTRA_LATENCY, -1);
+                    updateUiState(isConnected, isConnecting, statusMsg, durationSec, rxBytes, txBytes, latency);
                 } else if (LogManager.ACTION_NEW_LOG.equals(intent.getAction())) {
                     String line = intent.getStringExtra(LogManager.EXTRA_LOG_LINE);
                     if (line != null && mTvLogs != null) {
@@ -175,15 +177,29 @@ public class MainActivity extends Activity {
             mTvLogs.setText(LogManager.getAllLogs());
         });
 
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 101);
+            }
+        }
+
         loadInstalledAppsAsync(null);
         updateAppRoutingSubtitle();
-        updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0);
+        updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0, -1);
+    }
+
+    private int resolveColor(int resId) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            return getColor(resId);
+        } else {
+            return getResources().getColor(resId);
+        }
     }
 
     private void setupModeSpinner() {
         String[] modes = new String[]{
                 "1. Psiphon Circumvention (Bypass)",
-                "2. Cloudflare WARP (Fast Direct)"
+                "2. Cloudflare DNS (1.1.1.1 Fast)"
         };
 
         ArrayAdapter<String> adapter = new ArrayAdapter<String>(this, R.layout.spinner_item, modes);
@@ -202,7 +218,7 @@ public class MainActivity extends Activity {
                         .putInt(KEY_MODE, mSelectedMode)
                         .apply();
                 updateServerCardText(mSelectedMode);
-                LogManager.log("UI", "Selected mode: " + (position == 0 ? "Psiphon Circumvention" : "Cloudflare WARP"));
+                LogManager.log("UI", "Selected mode: " + (position == 0 ? "Psiphon Circumvention" : "Cloudflare DNS"));
             }
 
             @Override
@@ -214,9 +230,11 @@ public class MainActivity extends Activity {
         if (mode == BeeVpnService.MODE_PSIPHON) {
             if (mTvServerTitle != null) mTvServerTitle.setText("Psiphon Fleet (Auto)");
             if (mTvServerSub != null) mTvServerSub.setText("Global obfuscated circumvention network");
+            if (mCardAppRouting != null) mCardAppRouting.setVisibility(View.VISIBLE);
         } else {
-            if (mTvServerTitle != null) mTvServerTitle.setText("Cloudflare Anycast (Auto)");
-            if (mTvServerSub != null) mTvServerSub.setText("Ultra-fast direct encrypted tunnel");
+            if (mTvServerTitle != null) mTvServerTitle.setText("Cloudflare DNS (1.1.1.1)");
+            if (mTvServerSub != null) mTvServerSub.setText("Fast public DNS resolver (bypasses DNS filtering)");
+            if (mCardAppRouting != null) mCardAppRouting.setVisibility(View.GONE);
         }
     }
 
@@ -235,9 +253,14 @@ public class MainActivity extends Activity {
     }
 
     private synchronized void loadInstalledAppsAsync(final Runnable onComplete) {
-        if (mAppsLoaded && onComplete != null) {
-            runOnUiThread(onComplete);
+        if (mAppsLoaded) {
+            if (onComplete != null) runOnUiThread(onComplete);
             return;
+        }
+        if (onComplete != null) {
+            synchronized (mPendingAppCallbacks) {
+                mPendingAppCallbacks.add(onComplete);
+            }
         }
         if (mIsLoadingApps) return;
         mIsLoadingApps = true;
@@ -276,8 +299,13 @@ public class MainActivity extends Activity {
                     mAppsLoaded = true;
                     mIsLoadingApps = false;
                 }
-                if (onComplete != null) {
-                    onComplete.run();
+                List<Runnable> pending;
+                synchronized (mPendingAppCallbacks) {
+                    pending = new ArrayList<>(mPendingAppCallbacks);
+                    mPendingAppCallbacks.clear();
+                }
+                for (Runnable r : pending) {
+                    r.run();
                 }
             });
         }, "BeeVpn-AppLoader").start();
@@ -420,7 +448,7 @@ public class MainActivity extends Activity {
         }
 
         updateAppRoutingSubtitle();
-        updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0);
+        updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0, -1);
     }
 
     @Override
@@ -469,20 +497,24 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void updateUiState(boolean isConnected, boolean isConnecting, String statusMsg, long durationSec, long rxBytes, long txBytes) {
+    private void updateUiState(boolean isConnected, boolean isConnecting, String statusMsg, long durationSec, long rxBytes, long txBytes, int latency) {
         if (isConnected) {
             mBtnToggleVpn.setText(R.string.disconnect);
             mBtnToggleVpn.setBackgroundResource(R.drawable.btn_disconnect_bg);
 
-            mTvStatusBadge.setText(R.string.status_connected_desc);
+            mTvStatusBadge.setText(mSelectedMode == BeeVpnService.MODE_PSIPHON ? getString(R.string.status_connected_desc) : "DNS ACTIVE");
             mTvStatusBadge.setBackgroundResource(R.drawable.badge_connected_bg);
-            mTvStatusBadge.setTextColor(getColor(R.color.status_connected));
+            mTvStatusBadge.setTextColor(resolveColor(R.color.status_connected));
 
-            String modeName = statusMsg != null ? statusMsg : (mSelectedMode == BeeVpnService.MODE_PSIPHON ? "PSIPHON ACTIVE" : "CLOUDFLARE WARP ACTIVE");
+            String modeName = statusMsg != null ? statusMsg : (mSelectedMode == BeeVpnService.MODE_PSIPHON ? "PSIPHON ACTIVE" : "CLOUDFLARE DNS ACTIVE");
             mTvConnectionState.setText(modeName.toUpperCase(Locale.US));
-            mTvConnectionState.setTextColor(getColor(R.color.status_connected));
+            mTvConnectionState.setTextColor(resolveColor(R.color.status_connected));
 
-            mTvHint.setText("Traffic is encrypted and securely routed");
+            if (mSelectedMode == BeeVpnService.MODE_PSIPHON) {
+                mTvHint.setText("Traffic is encrypted and securely routed");
+            } else {
+                mTvHint.setText("DNS queries routed via 1.1.1.1 (general traffic direct)");
+            }
 
             long hrs = durationSec / 3600;
             long mins = (durationSec % 3600) / 60;
@@ -492,8 +524,12 @@ public class MainActivity extends Activity {
             mTvDownload.setText(BeeVpnService.formatBytes(rxBytes));
             mTvUpload.setText(BeeVpnService.formatBytes(txBytes));
 
-            mTvLatency.setText("● 24 ms");
-            mTvLatency.setTextColor(getColor(R.color.status_connected));
+            if (latency > 0) {
+                mTvLatency.setText("● " + latency + " ms");
+            } else {
+                mTvLatency.setText("● Active");
+            }
+            mTvLatency.setTextColor(resolveColor(R.color.status_connected));
 
             mSpinnerMode.setEnabled(false);
         } else if (isConnecting) {
@@ -502,10 +538,10 @@ public class MainActivity extends Activity {
 
             mTvStatusBadge.setText("CONNECTING");
             mTvStatusBadge.setBackgroundResource(R.drawable.badge_status_bg);
-            mTvStatusBadge.setTextColor(getColor(R.color.bee_gold));
+            mTvStatusBadge.setTextColor(resolveColor(R.color.bee_gold));
 
             mTvConnectionState.setText(statusMsg != null ? statusMsg.toUpperCase(Locale.US) : "SECURING TUNNEL...");
-            mTvConnectionState.setTextColor(getColor(R.color.bee_gold));
+            mTvConnectionState.setTextColor(resolveColor(R.color.bee_gold));
 
             mTvHint.setText("Negotiating handshake with server fleet...");
 
@@ -513,7 +549,7 @@ public class MainActivity extends Activity {
             mTvDownload.setText("0.0 MB");
             mTvUpload.setText("0.0 MB");
             mTvLatency.setText("○ Probing");
-            mTvLatency.setTextColor(getColor(R.color.bee_gold));
+            mTvLatency.setTextColor(resolveColor(R.color.bee_gold));
 
             mSpinnerMode.setEnabled(false);
         } else {
@@ -522,10 +558,10 @@ public class MainActivity extends Activity {
 
             mTvStatusBadge.setText(R.string.status_not_connected);
             mTvStatusBadge.setBackgroundResource(R.drawable.badge_status_bg);
-            mTvStatusBadge.setTextColor(getColor(R.color.status_disconnected));
+            mTvStatusBadge.setTextColor(resolveColor(R.color.status_disconnected));
 
             mTvConnectionState.setText("DISCONNECTED");
-            mTvConnectionState.setTextColor(getColor(R.color.text_dim));
+            mTvConnectionState.setTextColor(resolveColor(R.color.text_dim));
 
             mTvHint.setText("Select network mode and tap to connect");
 
@@ -533,7 +569,7 @@ public class MainActivity extends Activity {
             mTvDownload.setText("0.0 MB");
             mTvUpload.setText("0.0 MB");
             mTvLatency.setText("○ Idle");
-            mTvLatency.setTextColor(getColor(R.color.text_dim));
+            mTvLatency.setTextColor(resolveColor(R.color.text_dim));
 
             mSpinnerMode.setEnabled(true);
         }
