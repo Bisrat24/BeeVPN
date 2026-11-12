@@ -12,6 +12,7 @@ import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
 import android.net.VpnService;
 import android.os.Build;
@@ -31,7 +32,6 @@ import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -40,11 +40,12 @@ import android.widget.Toast;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -433,41 +434,114 @@ public class MainActivity extends Activity {
 
         new Thread(() -> {
             PackageManager pm = getPackageManager();
-            List<PackageInfo> installedPackages;
-            try {
-                installedPackages = pm.getInstalledPackages(0);
-            } catch (Exception e) {
-                installedPackages = new ArrayList<>();
-            }
-
             SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
             Set<String> savedSelected = prefs.getStringSet(KEY_SELECTED_PACKAGES, new HashSet<>());
-
-            List<AppEntry> loaded = new ArrayList<>();
             String myPkg = getPackageName();
 
-            for (PackageInfo pi : installedPackages) {
-                if (pi.packageName == null || pi.packageName.equals(myPkg)) continue;
-                if (pi.applicationInfo == null) continue;
+            Map<String, AppEntry> appMap = new LinkedHashMap<>();
 
-                boolean isSystem = (pi.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
-                String label;
-                try {
-                    CharSequence cs = pi.applicationInfo.loadLabel(pm);
-                    label = cs != null ? cs.toString().trim() : pi.packageName;
-                } catch (Throwable t) {
-                    label = pi.packageName;
+            // Pass 1: Query all installed packages via PackageManager
+            try {
+                List<PackageInfo> installedPackages = pm.getInstalledPackages(0);
+                if (installedPackages != null) {
+                    for (PackageInfo pi : installedPackages) {
+                        if (pi == null || pi.packageName == null || pi.packageName.equals(myPkg)) continue;
+                        ApplicationInfo ai = pi.applicationInfo;
+                        if (ai == null) {
+                            try {
+                                ai = pm.getApplicationInfo(pi.packageName, 0);
+                            } catch (Throwable ignored) {}
+                        }
+                        if (ai == null) continue;
+
+                        // System app definition: FLAG_SYSTEM is set AND FLAG_UPDATED_SYSTEM_APP is NOT set.
+                        // Updated system apps (Chrome, YouTube, Maps, etc.) are treated as user apps.
+                        boolean isSystem = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0
+                                && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+
+                        String label;
+                        try {
+                            CharSequence cs = ai.loadLabel(pm);
+                            label = cs != null ? cs.toString().trim() : pi.packageName;
+                        } catch (Throwable t) {
+                            label = pi.packageName;
+                        }
+                        if (label.isEmpty()) label = pi.packageName;
+
+                        Drawable icon = null;
+                        try {
+                            icon = ai.loadIcon(pm);
+                        } catch (Throwable ignored) {}
+
+                        boolean isSelected = savedSelected.contains(pi.packageName);
+                        appMap.put(pi.packageName, new AppEntry(label, pi.packageName, icon, isSystem, isSelected));
+                    }
                 }
-                if (label.isEmpty()) label = pi.packageName;
-
-                Drawable icon = null;
-                try {
-                    icon = pi.applicationInfo.loadIcon(pm);
-                } catch (Throwable ignored) {}
-
-                boolean isSelected = savedSelected.contains(pi.packageName);
-                loaded.add(new AppEntry(label, pi.packageName, icon, isSystem, isSelected));
+            } catch (Throwable t) {
+                android.util.Log.w("BeeVPN", "Error scanning installed packages: " + t.getMessage());
             }
+
+            // Pass 2: Query launchable activities to ensure 100% of user-facing launchable apps are captured
+            try {
+                Intent launcherIntent = new Intent(Intent.ACTION_MAIN, null);
+                launcherIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+                List<ResolveInfo> launcherList = pm.queryIntentActivities(launcherIntent, 0);
+                if (launcherList != null) {
+                    for (ResolveInfo ri : launcherList) {
+                        if (ri.activityInfo == null || ri.activityInfo.packageName == null) continue;
+                        String pkg = ri.activityInfo.packageName;
+                        if (pkg.equals(myPkg)) continue;
+
+                        ApplicationInfo ai = ri.activityInfo.applicationInfo;
+                        if (ai == null) {
+                            try {
+                                ai = pm.getApplicationInfo(pkg, 0);
+                            } catch (Throwable ignored) {}
+                        }
+
+                        if (!appMap.containsKey(pkg)) {
+                            boolean isSystem = false;
+                            if (ai != null) {
+                                isSystem = (ai.flags & ApplicationInfo.FLAG_SYSTEM) != 0
+                                        && (ai.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+                            }
+                            String label;
+                            try {
+                                CharSequence cs = ri.loadLabel(pm);
+                                if (cs == null && ai != null) cs = ai.loadLabel(pm);
+                                label = cs != null ? cs.toString().trim() : pkg;
+                            } catch (Throwable t) {
+                                label = pkg;
+                            }
+                            if (label.isEmpty()) label = pkg;
+
+                            Drawable icon = null;
+                            try {
+                                icon = ri.loadIcon(pm);
+                                if (icon == null && ai != null) icon = ai.loadIcon(pm);
+                            } catch (Throwable ignored) {}
+
+                            boolean isSelected = savedSelected.contains(pkg);
+                            appMap.put(pkg, new AppEntry(label, pkg, icon, isSystem, isSelected));
+                        } else {
+                            // If entry exists but has package name as title, try resolving a human-readable title
+                            AppEntry existing = appMap.get(pkg);
+                            if (existing != null && existing.name.equals(pkg)) {
+                                try {
+                                    CharSequence cs = ri.loadLabel(pm);
+                                    if (cs != null && !cs.toString().trim().isEmpty()) {
+                                        existing.name = cs.toString().trim();
+                                    }
+                                } catch (Throwable ignored) {}
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                android.util.Log.w("BeeVPN", "Error scanning launcher activities: " + t.getMessage());
+            }
+
+            List<AppEntry> loaded = new ArrayList<>(appMap.values());
 
             // User apps first, then system apps. Alphabetical by name.
             Collections.sort(loaded, (a, b) -> {
@@ -887,9 +961,9 @@ public class MainActivity extends Activity {
     }
 
     public static class AppEntry {
-        public final String name;
+        public String name;
         public final String packageName;
-        public final Drawable icon;
+        public Drawable icon;
         public final boolean isSystemApp;
         public boolean selected;
 
