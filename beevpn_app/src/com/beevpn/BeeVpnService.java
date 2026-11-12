@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+import android.os.SystemClock;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -33,7 +34,11 @@ import java.net.Socket;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
@@ -59,6 +64,7 @@ public class BeeVpnService extends VpnService {
     public static final String EXTRA_RX_BYTES = "extra_rx_bytes";
     public static final String EXTRA_TX_BYTES = "extra_tx_bytes";
     public static final String EXTRA_LATENCY = "extra_latency";
+    public static final String EXTRA_ACTIVE_MODE = "extra_active_mode";
 
     private static final String CHANNEL_ID = "beevpn_channel";
     private static final String CHANNEL_ALERTS_ID = "beevpn_alerts";
@@ -87,10 +93,21 @@ public class BeeVpnService extends VpnService {
     private static final String DOT_HOST = "cloudflare-dns.com";
     private static final String DOT_SERVER = "1.1.1.1";
     private static final int DOT_PORT = 853;
+    private static final int DOT_CONNECT_TIMEOUT_MS = 2500;
+    private static final int DOT_READ_TIMEOUT_MS = 2500;
+    // After a failed handshake, skip DoT entirely for this long. Without the
+    // backoff every query paid the full connect timeout on filtered networks.
+    private static final long DOT_RETRY_INTERVAL_MS = 60000;
+    private static final int UDP_TIMEOUT_MS = 1500;
+    private static final String[] UDP_FALLBACK_SERVERS = {"1.1.1.1", "1.0.0.1"};
+    private static final int DNS_WORKERS = 8;
+    private static final int DNS_QUEUE_CAPACITY = 512;
     private final ThreadLocal<DnsOverTls> mDotResolvers = new ThreadLocal<>();
     private final Set<DnsOverTls> mOpenDotResolvers =
             Collections.newSetFromMap(new ConcurrentHashMap<DnsOverTls, Boolean>());
     private volatile boolean mDotHealthy = false;
+    private volatile long mDotRetryAfterMs = 0;
+    private volatile boolean mDnsQueueWarned = false;
 
     private long mStartTime = 0;
     private final java.util.concurrent.atomic.AtomicLong mRxBytes = new java.util.concurrent.atomic.AtomicLong(0);
@@ -182,23 +199,23 @@ public class BeeVpnService extends VpnService {
     }
 
     private void startCloudflareDnsMode() {
+        sCurrentMode = MODE_CLOUDFLARE;
         try {
             LogManager.log("DNS", "Building DNS resolver VPN interface (10.8.0.2)...");
             Builder builder = new Builder();
             builder.setSession("BeeVPN Cloudflare DNS");
             builder.addAddress("10.8.0.2", 24);
-            builder.addDnsServer("1.1.1.1");
-            builder.addDnsServer("1.0.0.1");
-            builder.addRoute("1.1.1.1", 32);
-            builder.addRoute("1.0.0.1", 32);
+            // Resolver address inside the tunnel subnet: the on-link route implied
+            // by addAddress captures it, so naming 1.1.1.1 as the DNS server is no
+            // longer needed (and 1.1.1.1 stays reachable for apps that use it).
+            builder.addDnsServer("10.8.0.3");
+            builder.addRoute("10.8.0.3", 32);
 
             // Prevent IPv6 DNS bypass on dual-stack carrier networks
             try {
-                builder.addAddress("fd00::2", 128);
-                builder.addDnsServer("2606:4700:4700::1111");
-                builder.addDnsServer("2606:4700:4700::1001");
-                builder.addRoute("2606:4700:4700::1111", 128);
-                builder.addRoute("2606:4700:4700::1001", 128);
+                builder.addAddress("fd00:bee::2", 64);
+                builder.addDnsServer("fd00:bee::3");
+                builder.addRoute("fd00:bee::3", 128);
             } catch (Exception ignored) {}
 
             // DNS mode must cover every app's resolver traffic; split-tunnel selections do not apply.
@@ -218,8 +235,11 @@ public class BeeVpnService extends VpnService {
             sIsConnecting = false;
             mStartTime = System.currentTimeMillis();
             mLastStatusMsg = "Cloudflare DNS Active";
-            LogManager.log("DNS", "ACTIVE! Fast DNS resolver active (1.1.1.1). General device traffic is direct.");
-            updateNotification("BeeVPN DNS Active", "DNS via 1.1.1.1 (General traffic direct)");
+            mDotHealthy = false;
+            mDotRetryAfterMs = 0;
+            mDnsQueueWarned = false;
+            LogManager.log("DNS", "ACTIVE! Encrypted DNS resolver online (DoT with UDP/53 fallback). General device traffic is direct.");
+            updateNotification("BeeVPN DNS Active", "DNS encrypted (general traffic direct)");
             broadcastStatus(true, false, mLastStatusMsg);
 
             startDnsWorker();
@@ -231,14 +251,24 @@ public class BeeVpnService extends VpnService {
     }
 
     private void startDnsWorker() {
-        mDnsExecutor = java.util.concurrent.Executors.newFixedThreadPool(4);
+        // Bounded queue: an unbounded executor retains every packet while the
+        // upstream resolver is slow, which starves memory on low-end phones.
+        RejectedExecutionHandler dropWithNotice = (r, executor) -> {
+            if (!mDnsQueueWarned) {
+                mDnsQueueWarned = true;
+                LogManager.log("WARN", "DNS queue saturated; dropping excess queries.");
+            }
+        };
+        mDnsExecutor = new ThreadPoolExecutor(
+                DNS_WORKERS, DNS_WORKERS, 30, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<Runnable>(DNS_QUEUE_CAPACITY),
+                dropWithNotice);
         mWorkerThread = new Thread(() -> {
             FileInputStream in = new FileInputStream(mVpnInterface.getFileDescriptor());
             FileOutputStream out = new FileOutputStream(mVpnInterface.getFileDescriptor());
             byte[] packet = new byte[32768];
 
             try {
-                InetAddress dnsServer = InetAddress.getByName(DOT_SERVER);
                 LogManager.log("DNS", "DNS worker active. Queries use DNS-over-TLS with UDP/53 fallback.");
 
                 while (!mShouldStop) {
@@ -265,7 +295,7 @@ public class BeeVpnService extends VpnService {
 
                             mDnsExecutor.execute(() -> {
                                 try {
-                                    byte[] response = resolveDnsQuery(query, dnsServer);
+                                    byte[] response = resolveDnsQuery(query);
                                     if (response == null) return;
 
                                     mRxBytes.addAndGet(response.length);
@@ -296,7 +326,7 @@ public class BeeVpnService extends VpnService {
 
                             mDnsExecutor.execute(() -> {
                                 try {
-                                    byte[] response = resolveDnsQuery(query, dnsServer);
+                                    byte[] response = resolveDnsQuery(query);
                                     if (response == null) return;
 
                                     mRxBytes.addAndGet(response.length);
@@ -328,50 +358,57 @@ public class BeeVpnService extends VpnService {
         mWorkerThread.start();
     }
 
-    private byte[] resolveDnsQuery(byte[] query, InetAddress dnsServer) {
-        DnsOverTls resolver = mDotResolvers.get();
-        if (resolver == null) {
-            resolver = new DnsOverTls();
-            mDotResolvers.set(resolver);
-            mOpenDotResolvers.add(resolver);
-        }
-
-        byte[] response = resolver.resolve(query);
-        if (response != null) {
-            if (!mDotHealthy) {
-                mDotHealthy = true;
-                LogManager.log("DNS", "DNS-over-TLS established with " + DOT_HOST + " (" + DOT_SERVER + ":" + DOT_PORT + ").");
+    private byte[] resolveDnsQuery(byte[] query) {
+        long now = SystemClock.elapsedRealtime();
+        if (now >= mDotRetryAfterMs) {
+            DnsOverTls resolver = mDotResolvers.get();
+            if (resolver == null) {
+                resolver = new DnsOverTls();
+                mDotResolvers.set(resolver);
+                mOpenDotResolvers.add(resolver);
             }
-            return response;
-        }
 
-        if (mDotHealthy) {
+            byte[] response = resolver.resolve(query);
+            if (response != null) {
+                if (!mDotHealthy) {
+                    mDotHealthy = true;
+                    LogManager.log("DNS", "DNS-over-TLS established with " + DOT_HOST + " (" + DOT_SERVER + ":" + DOT_PORT + ").");
+                }
+                mDotRetryAfterMs = 0;
+                return response;
+            }
+
             mDotHealthy = false;
-            LogManager.log("DNS", "DNS-over-TLS unavailable. Falling back to plaintext UDP/53.");
+            mDotRetryAfterMs = now + DOT_RETRY_INTERVAL_MS;
+            LogManager.log("DNS", "DNS-over-TLS unavailable; using UDP/53 for the next 60s.");
         }
-        return resolveUdp(query, dnsServer);
+        return resolveUdp(query);
     }
 
-    private byte[] resolveUdp(byte[] query, InetAddress dnsServer) {
-        DatagramSocket socket = null;
-        try {
-            socket = new DatagramSocket();
-            protect(socket);
-            socket.setSoTimeout(3000);
+    private byte[] resolveUdp(byte[] query) {
+        for (String server : UDP_FALLBACK_SERVERS) {
+            DatagramSocket socket = null;
+            try {
+                socket = new DatagramSocket();
+                protect(socket);
+                socket.setSoTimeout(UDP_TIMEOUT_MS);
 
-            socket.send(new DatagramPacket(query, query.length, dnsServer, 53));
-            byte[] respBuf = new byte[4096];
-            DatagramPacket inPacket = new DatagramPacket(respBuf, respBuf.length);
-            socket.receive(inPacket);
+                InetAddress address = InetAddress.getByName(server);
+                socket.send(new DatagramPacket(query, query.length, address, 53));
+                byte[] respBuf = new byte[4096];
+                DatagramPacket inPacket = new DatagramPacket(respBuf, respBuf.length);
+                socket.receive(inPacket);
 
-            byte[] response = new byte[inPacket.getLength()];
-            System.arraycopy(respBuf, 0, response, 0, response.length);
-            return response;
-        } catch (Exception ignored) {
-            return null;
-        } finally {
-            if (socket != null) socket.close();
+                byte[] response = new byte[inPacket.getLength()];
+                System.arraycopy(respBuf, 0, response, 0, response.length);
+                return response;
+            } catch (Exception ignored) {
+                // Try the next resolver instead of failing the whole query.
+            } finally {
+                if (socket != null) socket.close();
+            }
         }
+        return null;
     }
 
     private void closeDotResolvers() {
@@ -390,41 +427,42 @@ public class BeeVpnService extends VpnService {
         synchronized byte[] resolve(byte[] query) {
             if (query.length == 0 || query.length > 65535) return null;
 
-            for (int attempt = 0; attempt < 2; attempt++) {
-                try {
-                    connect();
-                    mOut.write((query.length >> 8) & 0xFF);
-                    mOut.write(query.length & 0xFF);
-                    mOut.write(query);
-                    mOut.flush();
+            // One attempt only: a retry here doubles the latency of every query
+            // before the caller falls back, and the caller now backs off DoT.
+            try {
+                connect();
+                mOut.write((query.length >> 8) & 0xFF);
+                mOut.write(query.length & 0xFF);
+                mOut.write(query);
+                mOut.flush();
 
-                    int hi = mIn.read();
-                    int lo = mIn.read();
-                    if (hi < 0 || lo < 0) throw new IOException("DNS-over-TLS stream closed");
-                    int length = (hi << 8) | lo;
-                    if (length <= 0) throw new IOException("Invalid DNS-over-TLS response length");
+                int hi = mIn.read();
+                int lo = mIn.read();
+                if (hi < 0 || lo < 0) throw new IOException("DNS-over-TLS stream closed");
+                int length = (hi << 8) | lo;
+                if (length <= 0) throw new IOException("Invalid DNS-over-TLS response length");
 
-                    byte[] response = new byte[length];
-                    readFully(mIn, response, response.length);
-                    return response;
-                } catch (Exception e) {
-                    closeQuietly();
-                }
+                byte[] response = new byte[length];
+                readFully(mIn, response, response.length);
+                return response;
+            } catch (Exception e) {
+                closeQuietly();
+                return null;
             }
-            return null;
         }
 
         private void connect() throws IOException {
             if (mSocket != null && !mSocket.isClosed()) return;
 
             mRawSocket = new Socket();
-            mRawSocket.connect(new InetSocketAddress(DOT_SERVER, DOT_PORT), 4000);
+            mRawSocket.connect(new InetSocketAddress(DOT_SERVER, DOT_PORT), DOT_CONNECT_TIMEOUT_MS);
+            mRawSocket.setKeepAlive(true);
             protect(mRawSocket);
 
             SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
             SSLSocket socket = (SSLSocket) factory.createSocket(
                     mRawSocket, DOT_HOST, DOT_PORT, true);
-            socket.setSoTimeout(4000);
+            socket.setSoTimeout(DOT_READ_TIMEOUT_MS);
 
             // Layering over the connected IP socket keeps certificate checks and
             // SNI bound to the DoT host name (1.1.1.1 is only the transport).
@@ -804,7 +842,12 @@ public class BeeVpnService extends VpnService {
                 builder.addRoute("::", 0);
             } catch (Exception ignored) {}
 
-            applyAppRouting(builder);
+            if (!applyAppRouting(builder)) {
+                LogManager.log("ERROR", "Aborting connection: split-tunnel selection has no installed apps.");
+                mLastStatusMsg = "No apps selected for split tunnel";
+                mHandler.post(BeeVpnService.this::stopVpn);
+                return;
+            }
             builder.setMtu(1400);
 
             mVpnInterface = builder.establish();
@@ -858,13 +901,26 @@ public class BeeVpnService extends VpnService {
         }
     }
 
-    private void applyAppRouting(Builder builder) {
+    /**
+     * @return false when split tunneling was requested but nothing can be routed;
+     *         the caller must abort rather than silently tunnel every app.
+     */
+    private boolean applyAppRouting(Builder builder) {
         try {
             SharedPreferences prefs = getSharedPreferences("beevpn_prefs", MODE_PRIVATE);
-            boolean tunnelAll = prefs.getBoolean("tunnel_all_apps", true);
+            int routingMode = prefs.getInt("app_routing_mode", -1);
+            if (routingMode == -1) {
+                boolean tunnelAll = prefs.getBoolean("tunnel_all_apps", true);
+                routingMode = tunnelAll ? 0 : 1;
+            }
             Set<String> selectedPackages = prefs.getStringSet("selected_packages", null);
 
-            if (!tunnelAll && selectedPackages != null && !selectedPackages.isEmpty()) {
+            if (routingMode == 1) { // Whitelist: route ONLY selected apps
+                if (selectedPackages == null || selectedPackages.isEmpty()) {
+                    LogManager.log("WARN", "Split tunnel (Whitelist) has no apps chosen; refusing to tunnel everything.");
+                    return false;
+                }
+
                 PackageManager pm = getPackageManager();
                 int allowedCount = 0;
                 for (String pkg : selectedPackages) {
@@ -878,17 +934,37 @@ public class BeeVpnService extends VpnService {
                 }
                 if (allowedCount > 0) {
                     LogManager.log("VPN", "Split tunnel active: routing traffic for " + allowedCount + " selected app(s).");
-                    return;
+                    return true;
                 }
+
+                LogManager.log("WARN", "None of the " + selectedPackages.size()
+                        + " split-tunnel apps are installed; refusing to fall back to full tunnel.");
+                return false;
+            } else if (routingMode == 2) { // Blacklist: BYPASS selected apps
+                builder.addDisallowedApplication(getPackageName());
+                int bypassedCount = 0;
+                if (selectedPackages != null && !selectedPackages.isEmpty()) {
+                    PackageManager pm = getPackageManager();
+                    for (String pkg : selectedPackages) {
+                        try {
+                            pm.getPackageInfo(pkg, 0);
+                            builder.addDisallowedApplication(pkg);
+                            bypassedCount++;
+                        } catch (PackageManager.NameNotFoundException ignored) {
+                            // Application uninstalled or unavailable
+                        }
+                    }
+                }
+                LogManager.log("VPN", "Split tunnel active: bypassing " + bypassedCount + " app(s) (direct), routing all other device traffic.");
+                return true;
             }
 
             builder.addDisallowedApplication(getPackageName());
             LogManager.log("VPN", "Full tunnel active: routing all device applications.");
+            return true;
         } catch (Exception e) {
             LogManager.log("WARN", "App routing setup error: " + e.getMessage());
-            try {
-                builder.addDisallowedApplication(getPackageName());
-            } catch (Exception ignored) {}
+            return false;
         }
     }
 
@@ -1043,6 +1119,9 @@ public class BeeVpnService extends VpnService {
         mShouldStop = true;
         mSocksPort = 0;
         mMeasuredLatencyMs = -1;
+        mDotHealthy = false;
+        mDotRetryAfterMs = 0;
+        mDnsQueueWarned = false;
 
         if (mConnectTimeoutRunnable != null) {
             mHandler.removeCallbacks(mConnectTimeoutRunnable);
@@ -1140,6 +1219,7 @@ public class BeeVpnService extends VpnService {
         intent.putExtra(EXTRA_RX_BYTES, mRxBytes.get());
         intent.putExtra(EXTRA_TX_BYTES, mTxBytes.get());
         intent.putExtra(EXTRA_LATENCY, mMeasuredLatencyMs);
+        intent.putExtra(EXTRA_ACTIVE_MODE, sCurrentMode);
         sendBroadcast(intent);
     }
 

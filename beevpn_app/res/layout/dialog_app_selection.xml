@@ -4,95 +4,233 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:background="@drawable/card_rounded"
-    android:padding="20dp">
+    android:padding="16dp">
 
-    <!-- Header -->
-    <TextView
+    <!-- Header & Live Counter -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="App Routing (Split Tunnel)"
-        android:textColor="@color/bee_gold"
-        android:textSize="18sp"
-        android:textStyle="bold" />
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:layout_marginBottom="12dp"
-        android:text="Select which applications route traffic through BeeVPN."
-        android:textColor="@color/text_gray"
-        android:textSize="12sp" />
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
 
-    <!-- Radio Options -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="App Routing (Split Tunnel)"
+                android:textColor="@color/bee_gold"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_selection_count"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Loading installed apps..."
+                android:textColor="@color/text_gray"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Routing Mode Radio Options -->
     <RadioGroup
         android:id="@+id/rg_tunnel_mode"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="10dp">
+        android:layout_marginTop="10dp"
+        android:layout_marginBottom="8dp">
 
         <RadioButton
             android:id="@+id/rb_all_apps"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Route all applications (Default)"
+            android:text="Route all applications (Full Device)"
             android:textColor="@color/text_white"
-            android:textSize="13sp"
-            android:paddingStart="6dp" />
+            android:textSize="12sp"
+            android:paddingStart="4dp" />
 
         <RadioButton
-            android:id="@+id/rb_selected_apps"
+            android:id="@+id/rb_tunnel_selected"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Route only selected applications"
+            android:text="Route only selected apps (Whitelist)"
             android:textColor="@color/text_white"
-            android:textSize="13sp"
-            android:paddingStart="6dp" />
+            android:textSize="12sp"
+            android:paddingStart="4dp" />
+
+        <RadioButton
+            android:id="@+id/rb_bypass_selected"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Bypass selected apps (Blacklist / Direct)"
+            android:textColor="@color/text_white"
+            android:textSize="12sp"
+            android:paddingStart="4dp" />
     </RadioGroup>
 
-    <!-- Quick Action Bar for Selection -->
+    <!-- Search Input Bar -->
     <LinearLayout
-        android:id="@+id/layout_app_actions"
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/search_input_bg"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:layout_marginBottom="8dp">
+
+        <EditText
+            android:id="@+id/et_search_apps"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@null"
+            android:hint="Search by name or package..."
+            android:textColorHint="@color/text_dim"
+            android:textColor="@color/text_white"
+            android:textSize="12sp"
+            android:singleLine="true"
+            android:imeOptions="actionSearch" />
+
+        <TextView
+            android:id="@+id/btn_clear_search"
+            android:layout_width="28dp"
+            android:layout_height="28dp"
+            android:gravity="center"
+            android:text="✕"
+            android:textColor="@color/text_gray"
+            android:textSize="13sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- Category Filter Chips (HibernatorX Style) -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="center_vertical"
         android:layout_marginBottom="8dp">
 
         <Button
-            android:id="@+id/btn_quick_popular"
+            android:id="@+id/btn_tab_user"
             android:layout_width="0dp"
-            android:layout_height="36dp"
+            android:layout_height="32dp"
             android:layout_weight="1"
-            android:layout_marginEnd="6dp"
-            android:background="@drawable/card_rounded"
-            android:text="Browsers &amp; Social"
+            android:layout_marginEnd="4dp"
+            android:background="@drawable/chip_tab_active"
+            android:text="User"
             android:textColor="@color/bee_gold"
             android:textSize="11sp" />
 
         <Button
-            android:id="@+id/btn_clear_all_apps"
+            android:id="@+id/btn_tab_system"
             android:layout_width="0dp"
-            android:layout_height="36dp"
+            android:layout_height="32dp"
             android:layout_weight="1"
-            android:layout_marginStart="6dp"
-            android:background="@drawable/card_rounded"
-            android:text="Clear All"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/chip_tab_inactive"
+            android:text="System"
+            android:textColor="@color/text_dim"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btn_tab_selected"
+            android:layout_width="0dp"
+            android:layout_height="32dp"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="4dp"
+            android:background="@drawable/chip_tab_inactive"
+            android:text="Selected"
+            android:textColor="@color/text_dim"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btn_tab_all"
+            android:layout_width="0dp"
+            android:layout_height="32dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:background="@drawable/chip_tab_inactive"
+            android:text="All"
             android:textColor="@color/text_dim"
             android:textSize="11sp" />
     </LinearLayout>
 
-    <!-- Installed Apps List -->
-    <ListView
-        android:id="@+id/lv_installed_apps"
+    <!-- Quick Mass Actions (Select All, Invert, Clear) -->
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="280dp"
-        android:divider="@color/card_stroke"
-        android:dividerHeight="1dp"
-        android:background="@drawable/card_rounded"
-        android:layout_marginBottom="14dp" />
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="8dp">
 
-    <!-- Dialog Actions -->
+        <Button
+            android:id="@+id/btn_action_select_all"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="4dp"
+            android:background="@drawable/card_rounded"
+            android:text="Select All"
+            android:textColor="@color/text_gray"
+            android:textSize="10sp" />
+
+        <Button
+            android:id="@+id/btn_action_invert"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_weight="1"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:background="@drawable/card_rounded"
+            android:text="Invert"
+            android:textColor="@color/text_gray"
+            android:textSize="10sp" />
+
+        <Button
+            android:id="@+id/btn_action_clear"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_weight="1"
+            android:layout_marginStart="4dp"
+            android:background="@drawable/card_rounded"
+            android:text="Clear"
+            android:textColor="@color/text_dim"
+            android:textSize="10sp" />
+    </LinearLayout>
+
+    <!-- Installed Apps List Frame -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="260dp"
+        android:background="@drawable/card_rounded"
+        android:layout_marginBottom="12dp">
+
+        <ListView
+            android:id="@+id/lv_installed_apps"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:divider="@color/card_stroke"
+            android:dividerHeight="1dp" />
+
+        <TextView
+            android:id="@+id/tv_empty_apps"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:text="No matching applications found"
+            android:textColor="@color/text_dim"
+            android:textSize="12sp"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- Dialog Action Buttons -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -102,23 +240,26 @@
         <Button
             android:id="@+id/btn_cancel_app_dialog"
             android:layout_width="wrap_content"
-            android:layout_height="40dp"
-            android:layout_marginEnd="10dp"
+            android:layout_height="38dp"
             android:background="@null"
             android:text="Cancel"
-            android:textColor="@color/text_gray"
-            android:textSize="13sp" />
+            android:textColor="@color/text_dim"
+            android:textSize="12sp"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp" />
 
         <Button
             android:id="@+id/btn_save_app_dialog"
             android:layout_width="wrap_content"
-            android:layout_height="40dp"
-            android:paddingStart="20dp"
-            android:paddingEnd="20dp"
-            android:background="@drawable/card_rounded"
-            android:text="Apply &amp; Save"
-            android:textColor="@color/bee_gold"
-            android:textSize="13sp"
-            android:textStyle="bold" />
+            android:layout_height="38dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/btn_connect_bg"
+            android:text="Save &amp; Apply"
+            android:textColor="@color/bg_dark"
+            android:textStyle="bold"
+            android:textSize="12sp"
+            android:paddingStart="18dp"
+            android:paddingEnd="18dp" />
     </LinearLayout>
+
 </LinearLayout>

@@ -6,8 +6,8 @@
     android:gravity="center_vertical"
     android:paddingStart="14dp"
     android:paddingEnd="14dp"
-    android:paddingTop="10dp"
-    android:paddingBottom="10dp"
+    android:paddingTop="9dp"
+    android:paddingBottom="9dp"
     android:background="?android:attr/selectableItemBackground">
 
     <ImageView
@@ -24,16 +24,38 @@
         android:layout_marginStart="12dp"
         android:layout_marginEnd="8dp">
 
-        <TextView
-            android:id="@+id/tv_app_name"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="App Name"
-            android:textColor="@color/text_white"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:maxLines="1"
-            android:ellipsize="end" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/tv_app_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="App Name"
+                android:textColor="@color/text_white"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:maxLines="1"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/tv_system_badge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/badge_system_bg"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:paddingTop="1dp"
+                android:paddingBottom="1dp"
+                android:text="SYSTEM"
+                android:textColor="@color/text_dim"
+                android:textSize="9sp"
+                android:visibility="gone" />
+        </LinearLayout>
 
         <TextView
             android:id="@+id/tv_app_package"

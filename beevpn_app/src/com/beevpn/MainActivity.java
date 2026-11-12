@@ -9,12 +9,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -24,6 +27,7 @@ import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ListView;
 import android.widget.RadioButton;
@@ -52,10 +56,15 @@ public class MainActivity extends Activity {
     private static final String PREF_NAME = "beevpn_prefs";
     private static final String KEY_MODE = "selected_mode";
     private static final String KEY_TUNNEL_ALL = "tunnel_all_apps";
+    private static final String KEY_ROUTING_MODE = "app_routing_mode";
     private static final String KEY_SELECTED_PACKAGES = "selected_packages";
     private static final String KEY_REGION = "egress_region";
     private static final String KEY_FAST_PROTOCOLS = "fast_protocols";
     private static final String REGION_AUTO = "Auto (Fastest)";
+
+    public static final int ROUTING_ALL = 0;
+    public static final int ROUTING_ONLY_SELECTED = 1;
+    public static final int ROUTING_BYPASS_SELECTED = 2;
 
     private TextView mTvStatusBadge;
     private TextView mTvConnectionState;
@@ -82,37 +91,14 @@ public class MainActivity extends Activity {
     private Button mBtnClearLogs;
 
     private int mSelectedMode = BeeVpnService.MODE_PSIPHON;
+    // Mode the service actually runs. Differs from mSelectedMode when Psiphon
+    // startup fails and the service falls back to DNS mode.
+    private int mActiveMode = BeeVpnService.MODE_PSIPHON;
 
     private final List<AppEntry> mInstalledApps = new ArrayList<>();
     private final List<Runnable> mPendingAppCallbacks = new ArrayList<>();
     private boolean mAppsLoaded = false;
     private boolean mIsLoadingApps = false;
-
-    private static final Set<String> POPULAR_PACKAGES = new HashSet<>(Arrays.asList(
-            "org.telegram.messenger",
-            "org.telegram.plus",
-            "org.thunderdog.challegram",
-            "org.telegram.messenger.web",
-            "com.android.chrome",
-            "org.mozilla.firefox",
-            "com.opera.browser",
-            "com.opera.mini.native",
-            "com.brave.browser",
-            "com.microsoft.emmx",
-            "com.sec.android.app.sbrowser",
-            "com.whatsapp",
-            "com.whatsapp.w4b",
-            "com.twitter.android",
-            "com.instagram.android",
-            "com.facebook.katana",
-            "com.facebook.lite",
-            "com.facebook.orca",
-            "com.zhiliaoapp.musically",
-            "com.ss.android.ugc.trill",
-            "com.google.android.youtube",
-            "com.google.android.apps.youtube.music",
-            "com.spotify.music"
-    ));
 
     private final BroadcastReceiver mStatusReceiver = new BroadcastReceiver() {
         @Override
@@ -126,6 +112,7 @@ public class MainActivity extends Activity {
                     long rxBytes = intent.getLongExtra(BeeVpnService.EXTRA_RX_BYTES, 0);
                     long txBytes = intent.getLongExtra(BeeVpnService.EXTRA_TX_BYTES, 0);
                     int latency = intent.getIntExtra(BeeVpnService.EXTRA_LATENCY, -1);
+                    mActiveMode = intent.getIntExtra(BeeVpnService.EXTRA_ACTIVE_MODE, mSelectedMode);
                     updateUiState(isConnected, isConnecting, statusMsg, durationSec, rxBytes, txBytes, latency);
                 } else if (LogManager.ACTION_NEW_LOG.equals(intent.getAction())) {
                     String line = intent.getStringExtra(LogManager.EXTRA_LOG_LINE);
@@ -198,7 +185,14 @@ public class MainActivity extends Activity {
 
         loadInstalledAppsAsync(null);
         updateAppRoutingSubtitle();
+        syncActiveMode();
         updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0, -1);
+    }
+
+    private void syncActiveMode() {
+        mActiveMode = (BeeVpnService.isRunning() || BeeVpnService.isConnecting())
+                ? BeeVpnService.getCurrentMode()
+                : mSelectedMode;
     }
 
     private int resolveColor(int resId) {
@@ -337,8 +331,7 @@ public class MainActivity extends Activity {
         boolean enabled = mSelectedMode == BeeVpnService.MODE_PSIPHON
                 && !BeeVpnService.isRunning()
                 && !BeeVpnService.isConnecting();
-        if (mSpinnerRegion != null) mSpinnerRegion.setEnabled(enabled);
-        if (mSpinnerProtocol != null) mSpinnerProtocol.setEnabled(enabled);
+        setOptionControlsEnabled(enabled);
     }
 
     private List<String> loadEmbeddedRegions() {
@@ -400,7 +393,7 @@ public class MainActivity extends Activity {
             if (mCardAppRouting != null) mCardAppRouting.setVisibility(View.VISIBLE);
         } else {
             if (mTvServerTitle != null) mTvServerTitle.setText("Cloudflare DNS (1.1.1.1)");
-            if (mTvServerSub != null) mTvServerSub.setText("Fast public DNS resolver (bypasses DNS filtering)");
+            if (mTvServerSub != null) mTvServerSub.setText("Encrypted DNS (DoT) with UDP fallback");
             if (mCardAppRouting != null) mCardAppRouting.setVisibility(View.GONE);
         }
     }
@@ -408,14 +401,20 @@ public class MainActivity extends Activity {
     private void updateAppRoutingSubtitle() {
         if (mTvAppRoutingSub == null) return;
         SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
-        boolean tunnelAll = prefs.getBoolean(KEY_TUNNEL_ALL, true);
+        int mode = prefs.getInt(KEY_ROUTING_MODE, -1);
+        if (mode == -1) {
+            boolean tunnelAll = prefs.getBoolean(KEY_TUNNEL_ALL, true);
+            mode = tunnelAll ? ROUTING_ALL : ROUTING_ONLY_SELECTED;
+        }
         Set<String> selected = prefs.getStringSet(KEY_SELECTED_PACKAGES, null);
         int count = selected != null ? selected.size() : 0;
 
-        if (tunnelAll || count == 0) {
+        if (mode == ROUTING_ALL) {
             mTvAppRoutingSub.setText("All device apps routed (tap to customize)");
+        } else if (mode == ROUTING_ONLY_SELECTED) {
+            mTvAppRoutingSub.setText("Tunneling " + count + " selected app" + (count == 1 ? "" : "s") + " only");
         } else {
-            mTvAppRoutingSub.setText("Tunneling " + count + " selected app" + (count > 1 ? "s" : "") + " only");
+            mTvAppRoutingSub.setText("Bypassing " + count + " selected app" + (count == 1 ? "" : "s") + " (direct)");
         }
     }
 
@@ -434,30 +433,49 @@ public class MainActivity extends Activity {
 
         new Thread(() -> {
             PackageManager pm = getPackageManager();
-            Intent intent = new Intent(Intent.ACTION_MAIN, null);
-            intent.addCategory(Intent.CATEGORY_LAUNCHER);
-            List<ResolveInfo> resolveInfos = pm.queryIntentActivities(intent, 0);
+            List<PackageInfo> installedPackages;
+            try {
+                installedPackages = pm.getInstalledPackages(0);
+            } catch (Exception e) {
+                installedPackages = new ArrayList<>();
+            }
 
             SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
             Set<String> savedSelected = prefs.getStringSet(KEY_SELECTED_PACKAGES, new HashSet<>());
 
             List<AppEntry> loaded = new ArrayList<>();
-            Set<String> seen = new HashSet<>();
             String myPkg = getPackageName();
 
-            for (ResolveInfo ri : resolveInfos) {
-                if (ri.activityInfo == null || ri.activityInfo.packageName == null) continue;
-                String pkg = ri.activityInfo.packageName;
-                if (pkg.equals(myPkg) || seen.contains(pkg)) continue;
-                seen.add(pkg);
+            for (PackageInfo pi : installedPackages) {
+                if (pi.packageName == null || pi.packageName.equals(myPkg)) continue;
+                if (pi.applicationInfo == null) continue;
 
-                String label = ri.loadLabel(pm).toString();
-                Drawable icon = ri.loadIcon(pm);
-                boolean isSelected = savedSelected.contains(pkg);
-                loaded.add(new AppEntry(label, pkg, icon, isSelected));
+                boolean isSystem = (pi.applicationInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
+                String label;
+                try {
+                    CharSequence cs = pi.applicationInfo.loadLabel(pm);
+                    label = cs != null ? cs.toString().trim() : pi.packageName;
+                } catch (Throwable t) {
+                    label = pi.packageName;
+                }
+                if (label.isEmpty()) label = pi.packageName;
+
+                Drawable icon = null;
+                try {
+                    icon = pi.applicationInfo.loadIcon(pm);
+                } catch (Throwable ignored) {}
+
+                boolean isSelected = savedSelected.contains(pi.packageName);
+                loaded.add(new AppEntry(label, pi.packageName, icon, isSystem, isSelected));
             }
 
-            Collections.sort(loaded, (a, b) -> a.name.compareToIgnoreCase(b.name));
+            // User apps first, then system apps. Alphabetical by name.
+            Collections.sort(loaded, (a, b) -> {
+                if (a.isSystemApp != b.isSystemApp) {
+                    return a.isSystemApp ? 1 : -1;
+                }
+                return a.name.compareToIgnoreCase(b.name);
+            });
 
             runOnUiThread(() -> {
                 synchronized (mInstalledApps) {
@@ -466,6 +484,7 @@ public class MainActivity extends Activity {
                     mAppsLoaded = true;
                     mIsLoadingApps = false;
                 }
+                updateAppRoutingSubtitle();
                 List<Runnable> pending;
                 synchronized (mPendingAppCallbacks) {
                     pending = new ArrayList<>(mPendingAppCallbacks);
@@ -496,53 +515,147 @@ public class MainActivity extends Activity {
         }
 
         SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
-        boolean currentTunnelAll = prefs.getBoolean(KEY_TUNNEL_ALL, true);
+        int currentRoutingMode = prefs.getInt(KEY_ROUTING_MODE, -1);
+        if (currentRoutingMode == -1) {
+            boolean tunnelAll = prefs.getBoolean(KEY_TUNNEL_ALL, true);
+            currentRoutingMode = tunnelAll ? ROUTING_ALL : ROUTING_ONLY_SELECTED;
+        }
 
-        RadioGroup rgMode = dialog.findViewById(R.id.rg_tunnel_mode);
+        TextView tvSelectionCount = dialog.findViewById(R.id.tv_selection_count);
         RadioButton rbAll = dialog.findViewById(R.id.rb_all_apps);
-        RadioButton rbSelected = dialog.findViewById(R.id.rb_selected_apps);
-        Button btnPopular = dialog.findViewById(R.id.btn_quick_popular);
-        Button btnClear = dialog.findViewById(R.id.btn_clear_all_apps);
+        RadioButton rbTunnelSelected = dialog.findViewById(R.id.rb_tunnel_selected);
+        RadioButton rbBypassSelected = dialog.findViewById(R.id.rb_bypass_selected);
+
+        EditText etSearch = dialog.findViewById(R.id.et_search_apps);
+        TextView btnClearSearch = dialog.findViewById(R.id.btn_clear_search);
+
+        Button btnTabUser = dialog.findViewById(R.id.btn_tab_user);
+        Button btnTabSystem = dialog.findViewById(R.id.btn_tab_system);
+        Button btnTabSelected = dialog.findViewById(R.id.btn_tab_selected);
+        Button btnTabAll = dialog.findViewById(R.id.btn_tab_all);
+
+        Button btnSelectAll = dialog.findViewById(R.id.btn_action_select_all);
+        Button btnInvert = dialog.findViewById(R.id.btn_action_invert);
+        Button btnClear = dialog.findViewById(R.id.btn_action_clear);
+
         ListView lvApps = dialog.findViewById(R.id.lv_installed_apps);
+        TextView tvEmpty = dialog.findViewById(R.id.tv_empty_apps);
+
         Button btnCancel = dialog.findViewById(R.id.btn_cancel_app_dialog);
         Button btnSave = dialog.findViewById(R.id.btn_save_app_dialog);
 
-        if (currentTunnelAll) {
+        if (currentRoutingMode == ROUTING_ALL) {
             rbAll.setChecked(true);
+        } else if (currentRoutingMode == ROUTING_ONLY_SELECTED) {
+            rbTunnelSelected.setChecked(true);
         } else {
-            rbSelected.setChecked(true);
+            rbBypassSelected.setChecked(true);
         }
 
         List<AppEntry> dialogAppList = new ArrayList<>();
         synchronized (mInstalledApps) {
             for (AppEntry e : mInstalledApps) {
-                dialogAppList.add(new AppEntry(e.name, e.packageName, e.icon, e.selected));
+                dialogAppList.add(new AppEntry(e.name, e.packageName, e.icon, e.isSystemApp, e.selected));
             }
         }
 
         AppAdapter adapter = new AppAdapter(this, dialogAppList);
         lvApps.setAdapter(adapter);
 
-        lvApps.setOnItemClickListener((parent, view, position, id) -> {
-            AppEntry entry = dialogAppList.get(position);
-            entry.selected = !entry.selected;
-            adapter.notifyDataSetChanged();
-            if (entry.selected) {
-                rbSelected.setChecked(true);
+        Runnable updateCountsAndTabs = () -> {
+            int totalUser = 0;
+            int totalSystem = 0;
+            int totalSelected = 0;
+            for (AppEntry app : dialogAppList) {
+                if (app.isSystemApp) totalSystem++; else totalUser++;
+                if (app.selected) totalSelected++;
             }
+            tvSelectionCount.setText(totalUser + " User Apps • " + totalSystem + " System • " + totalSelected + " Selected");
+            btnTabUser.setText("User (" + totalUser + ")");
+            btnTabSystem.setText("System (" + totalSystem + ")");
+            btnTabSelected.setText("Selected (" + totalSelected + ")");
+            btnTabAll.setText("All (" + dialogAppList.size() + ")");
+            tvEmpty.setVisibility(adapter.getCount() == 0 ? View.VISIBLE : View.GONE);
+        };
+
+        updateCountsAndTabs.run();
+
+        View.OnClickListener tabClickListener = v -> {
+            int selectedTab = AppAdapter.TAB_USER;
+            int id = v.getId();
+            if (id == R.id.btn_tab_system) selectedTab = AppAdapter.TAB_SYSTEM;
+            else if (id == R.id.btn_tab_selected) selectedTab = AppAdapter.TAB_SELECTED;
+            else if (id == R.id.btn_tab_all) selectedTab = AppAdapter.TAB_ALL;
+
+            btnTabUser.setBackgroundResource(selectedTab == AppAdapter.TAB_USER ? R.drawable.chip_tab_active : R.drawable.chip_tab_inactive);
+            btnTabUser.setTextColor(resolveColor(selectedTab == AppAdapter.TAB_USER ? R.color.bee_gold : R.color.text_dim));
+
+            btnTabSystem.setBackgroundResource(selectedTab == AppAdapter.TAB_SYSTEM ? R.drawable.chip_tab_active : R.drawable.chip_tab_inactive);
+            btnTabSystem.setTextColor(resolveColor(selectedTab == AppAdapter.TAB_SYSTEM ? R.color.bee_gold : R.color.text_dim));
+
+            btnTabSelected.setBackgroundResource(selectedTab == AppAdapter.TAB_SELECTED ? R.drawable.chip_tab_active : R.drawable.chip_tab_inactive);
+            btnTabSelected.setTextColor(resolveColor(selectedTab == AppAdapter.TAB_SELECTED ? R.color.bee_gold : R.color.text_dim));
+
+            btnTabAll.setBackgroundResource(selectedTab == AppAdapter.TAB_ALL ? R.drawable.chip_tab_active : R.drawable.chip_tab_inactive);
+            btnTabAll.setTextColor(resolveColor(selectedTab == AppAdapter.TAB_ALL ? R.color.bee_gold : R.color.text_dim));
+
+            adapter.setTab(selectedTab);
+            updateCountsAndTabs.run();
+        };
+
+        btnTabUser.setOnClickListener(tabClickListener);
+        btnTabSystem.setOnClickListener(tabClickListener);
+        btnTabSelected.setOnClickListener(tabClickListener);
+        btnTabAll.setOnClickListener(tabClickListener);
+
+        etSearch.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                String q = s != null ? s.toString() : "";
+                btnClearSearch.setVisibility(q.isEmpty() ? View.GONE : View.VISIBLE);
+                adapter.setQuery(q);
+                updateCountsAndTabs.run();
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {}
         });
 
-        btnPopular.setOnClickListener(v -> {
-            int count = 0;
-            for (AppEntry app : dialogAppList) {
-                if (POPULAR_PACKAGES.contains(app.packageName)) {
-                    app.selected = true;
-                    count++;
-                }
+        btnClearSearch.setOnClickListener(v -> etSearch.setText(""));
+
+        lvApps.setOnItemClickListener((parent, view, position, id) -> {
+            AppEntry entry = adapter.getItem(position);
+            entry.selected = !entry.selected;
+            if (entry.selected && rbAll.isChecked()) {
+                rbTunnelSelected.setChecked(true);
             }
             adapter.notifyDataSetChanged();
-            rbSelected.setChecked(true);
-            Toast.makeText(this, "Selected " + count + " popular apps", Toast.LENGTH_SHORT).show();
+            updateCountsAndTabs.run();
+        });
+
+        btnSelectAll.setOnClickListener(v -> {
+            for (AppEntry app : adapter.getDisplayedList()) {
+                app.selected = true;
+            }
+            if (rbAll.isChecked()) {
+                rbTunnelSelected.setChecked(true);
+            }
+            adapter.notifyDataSetChanged();
+            updateCountsAndTabs.run();
+        });
+
+        btnInvert.setOnClickListener(v -> {
+            for (AppEntry app : adapter.getDisplayedList()) {
+                app.selected = !app.selected;
+            }
+            if (rbAll.isChecked()) {
+                rbTunnelSelected.setChecked(true);
+            }
+            adapter.notifyDataSetChanged();
+            updateCountsAndTabs.run();
         });
 
         btnClear.setOnClickListener(v -> {
@@ -550,10 +663,17 @@ public class MainActivity extends Activity {
                 app.selected = false;
             }
             adapter.notifyDataSetChanged();
+            updateCountsAndTabs.run();
         });
 
         btnSave.setOnClickListener(v -> {
-            boolean tunnelAll = rbAll.isChecked();
+            int selectedMode = ROUTING_ALL;
+            if (rbTunnelSelected.isChecked()) {
+                selectedMode = ROUTING_ONLY_SELECTED;
+            } else if (rbBypassSelected.isChecked()) {
+                selectedMode = ROUTING_BYPASS_SELECTED;
+            }
+
             Set<String> selectedPkgs = new HashSet<>();
             for (AppEntry app : dialogAppList) {
                 if (app.selected) {
@@ -561,8 +681,8 @@ public class MainActivity extends Activity {
                 }
             }
 
-            if (!tunnelAll && selectedPkgs.isEmpty()) {
-                Toast.makeText(this, "Please select at least 1 app, or choose 'Route all applications'", Toast.LENGTH_SHORT).show();
+            if (selectedMode == ROUTING_ONLY_SELECTED && selectedPkgs.isEmpty()) {
+                Toast.makeText(this, "Please select at least 1 app to tunnel, or choose 'Route all applications'", Toast.LENGTH_SHORT).show();
                 return;
             }
 
@@ -574,14 +694,18 @@ public class MainActivity extends Activity {
 
             getSharedPreferences(PREF_NAME, MODE_PRIVATE)
                     .edit()
-                    .putBoolean(KEY_TUNNEL_ALL, tunnelAll)
+                    .putInt(KEY_ROUTING_MODE, selectedMode)
+                    .putBoolean(KEY_TUNNEL_ALL, selectedMode == ROUTING_ALL)
                     .putStringSet(KEY_SELECTED_PACKAGES, selectedPkgs)
                     .apply();
 
             updateAppRoutingSubtitle();
             dialog.dismiss();
 
-            LogManager.log("UI", "App routing: " + (tunnelAll ? "All device apps" : selectedPkgs.size() + " app(s) selected"));
+            String modeName = selectedMode == ROUTING_ALL ? "All device apps"
+                    : (selectedMode == ROUTING_ONLY_SELECTED ? "Tunnel only " + selectedPkgs.size() + " app(s)"
+                    : "Bypass " + selectedPkgs.size() + " app(s)");
+            LogManager.log("UI", "App routing updated: " + modeName);
 
             if (BeeVpnService.isRunning() || BeeVpnService.isConnecting()) {
                 Toast.makeText(this, "Routing rules saved! Reconnect BeeVPN to apply to new tunnel.", Toast.LENGTH_LONG).show();
@@ -615,6 +739,7 @@ public class MainActivity extends Activity {
         }
 
         updateAppRoutingSubtitle();
+        syncActiveMode();
         updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0, -1);
     }
 
@@ -666,25 +791,24 @@ public class MainActivity extends Activity {
 
     private void updateUiState(boolean isConnected, boolean isConnecting, String statusMsg, long durationSec, long rxBytes, long txBytes, int latency) {
         boolean optionsEnabled = !isConnected && !isConnecting && mSelectedMode == BeeVpnService.MODE_PSIPHON;
-        if (mSpinnerRegion != null) mSpinnerRegion.setEnabled(optionsEnabled);
-        if (mSpinnerProtocol != null) mSpinnerProtocol.setEnabled(optionsEnabled);
+        setOptionControlsEnabled(optionsEnabled);
 
         if (isConnected) {
             mBtnToggleVpn.setText(R.string.disconnect);
             mBtnToggleVpn.setBackgroundResource(R.drawable.btn_disconnect_bg);
 
-            mTvStatusBadge.setText(mSelectedMode == BeeVpnService.MODE_PSIPHON ? getString(R.string.status_connected_desc) : "DNS ACTIVE");
+            mTvStatusBadge.setText(mActiveMode == BeeVpnService.MODE_PSIPHON ? getString(R.string.status_connected_desc) : "DNS ACTIVE");
             mTvStatusBadge.setBackgroundResource(R.drawable.badge_connected_bg);
             mTvStatusBadge.setTextColor(resolveColor(R.color.status_connected));
 
-            String modeName = statusMsg != null ? statusMsg : (mSelectedMode == BeeVpnService.MODE_PSIPHON ? "PSIPHON ACTIVE" : "CLOUDFLARE DNS ACTIVE");
+            String modeName = statusMsg != null ? statusMsg : (mActiveMode == BeeVpnService.MODE_PSIPHON ? "PSIPHON ACTIVE" : "CLOUDFLARE DNS ACTIVE");
             mTvConnectionState.setText(modeName.toUpperCase(Locale.US));
             mTvConnectionState.setTextColor(resolveColor(R.color.status_connected));
 
-            if (mSelectedMode == BeeVpnService.MODE_PSIPHON) {
+            if (mActiveMode == BeeVpnService.MODE_PSIPHON) {
                 mTvHint.setText("Traffic is encrypted and securely routed");
             } else {
-                mTvHint.setText("DNS queries routed via 1.1.1.1 (general traffic direct)");
+                mTvHint.setText("DNS encrypted via DoT; general traffic is direct");
             }
 
             long hrs = durationSec / 3600;
@@ -703,6 +827,7 @@ public class MainActivity extends Activity {
             mTvLatency.setTextColor(resolveColor(R.color.status_connected));
 
             mSpinnerMode.setEnabled(false);
+            mSpinnerMode.setAlpha(0.45f);
         } else if (isConnecting) {
             mBtnToggleVpn.setText("CANCEL");
             mBtnToggleVpn.setBackgroundResource(R.drawable.btn_connect_bg);
@@ -723,7 +848,9 @@ public class MainActivity extends Activity {
             mTvLatency.setTextColor(resolveColor(R.color.bee_gold));
 
             mSpinnerMode.setEnabled(false);
+            mSpinnerMode.setAlpha(0.45f);
         } else {
+            mActiveMode = mSelectedMode;
             mBtnToggleVpn.setText(R.string.connect);
             mBtnToggleVpn.setBackgroundResource(R.drawable.btn_connect_bg);
 
@@ -743,6 +870,19 @@ public class MainActivity extends Activity {
             mTvLatency.setTextColor(resolveColor(R.color.text_dim));
 
             mSpinnerMode.setEnabled(true);
+            mSpinnerMode.setAlpha(1f);
+        }
+    }
+
+    private void setOptionControlsEnabled(boolean enabled) {
+        float alpha = enabled ? 1f : 0.45f;
+        if (mSpinnerRegion != null) {
+            mSpinnerRegion.setEnabled(enabled);
+            mSpinnerRegion.setAlpha(alpha);
+        }
+        if (mSpinnerProtocol != null) {
+            mSpinnerProtocol.setEnabled(enabled);
+            mSpinnerProtocol.setAlpha(alpha);
         }
     }
 
@@ -750,35 +890,77 @@ public class MainActivity extends Activity {
         public final String name;
         public final String packageName;
         public final Drawable icon;
+        public final boolean isSystemApp;
         public boolean selected;
 
-        public AppEntry(String name, String packageName, Drawable icon, boolean selected) {
+        public AppEntry(String name, String packageName, Drawable icon, boolean isSystemApp, boolean selected) {
             this.name = name;
             this.packageName = packageName;
             this.icon = icon;
+            this.isSystemApp = isSystemApp;
             this.selected = selected;
         }
     }
 
     private static class AppAdapter extends BaseAdapter {
-        private final Context context;
-        private final List<AppEntry> apps;
+        public static final int TAB_USER = 0;
+        public static final int TAB_SYSTEM = 1;
+        public static final int TAB_SELECTED = 2;
+        public static final int TAB_ALL = 3;
+
+        private final List<AppEntry> masterList;
+        private final List<AppEntry> displayedList = new ArrayList<>();
         private final LayoutInflater inflater;
 
-        public AppAdapter(Context context, List<AppEntry> apps) {
-            this.context = context;
-            this.apps = apps;
+        private int currentTab = TAB_USER;
+        private String currentQuery = "";
+
+        public AppAdapter(Context context, List<AppEntry> masterList) {
+            this.masterList = masterList;
             this.inflater = LayoutInflater.from(context);
+            applyFilter();
+        }
+
+        public void setTab(int tab) {
+            this.currentTab = tab;
+            applyFilter();
+        }
+
+        public void setQuery(String query) {
+            this.currentQuery = query != null ? query.trim().toLowerCase(Locale.US) : "";
+            applyFilter();
+        }
+
+        public void applyFilter() {
+            displayedList.clear();
+            for (AppEntry entry : masterList) {
+                if (currentTab == TAB_USER && entry.isSystemApp) continue;
+                if (currentTab == TAB_SYSTEM && !entry.isSystemApp) continue;
+                if (currentTab == TAB_SELECTED && !entry.selected) continue;
+
+                if (!currentQuery.isEmpty()) {
+                    boolean matchName = entry.name != null && entry.name.toLowerCase(Locale.US).contains(currentQuery);
+                    boolean matchPkg = entry.packageName != null && entry.packageName.toLowerCase(Locale.US).contains(currentQuery);
+                    if (!matchName && !matchPkg) continue;
+                }
+
+                displayedList.add(entry);
+            }
+            notifyDataSetChanged();
+        }
+
+        public List<AppEntry> getDisplayedList() {
+            return displayedList;
         }
 
         @Override
         public int getCount() {
-            return apps.size();
+            return displayedList.size();
         }
 
         @Override
         public AppEntry getItem(int position) {
-            return apps.get(position);
+            return displayedList.get(position);
         }
 
         @Override
@@ -789,6 +971,7 @@ public class MainActivity extends Activity {
         private static class ViewHolder {
             ImageView icon;
             TextView name;
+            TextView systemBadge;
             TextView pkg;
             CheckBox checkBox;
         }
@@ -801,6 +984,7 @@ public class MainActivity extends Activity {
                 holder = new ViewHolder();
                 holder.icon = convertView.findViewById(R.id.iv_app_icon);
                 holder.name = convertView.findViewById(R.id.tv_app_name);
+                holder.systemBadge = convertView.findViewById(R.id.tv_system_badge);
                 holder.pkg = convertView.findViewById(R.id.tv_app_package);
                 holder.checkBox = convertView.findViewById(R.id.cb_app_selected);
                 convertView.setTag(holder);
@@ -808,9 +992,12 @@ public class MainActivity extends Activity {
                 holder = (ViewHolder) convertView.getTag();
             }
 
-            AppEntry entry = apps.get(position);
+            AppEntry entry = displayedList.get(position);
             holder.name.setText(entry.name);
             holder.pkg.setText(entry.packageName);
+            if (holder.systemBadge != null) {
+                holder.systemBadge.setVisibility(entry.isSystemApp ? View.VISIBLE : View.GONE);
+            }
             if (entry.icon != null) {
                 holder.icon.setImageDrawable(entry.icon);
             } else {

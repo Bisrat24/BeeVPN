@@ -25,7 +25,9 @@ namespace BeeVPN
     {
         public const string AdapterName = "BeeVPN";
         public const string TunAddress = "10.111.222.1";
+        public const string TunAddressV6 = "fd00:bee:1::1";
         private const int TunPrefixLength = 24;
+        private const int TunPrefixLengthV6 = 64;
         private const int TunMtu = 1400;
 
         // Windows' resolver ignores a DNS server that only exists on the tunnel
@@ -83,7 +85,6 @@ namespace BeeVPN
 
         public event Action<string, string>? LogMessage;
         public event Action<string>? Failed;
-        public event Action<long, long>? BytesTransferred;
 
         public (long rx, long tx) GetTotalBytes()
         {
@@ -163,7 +164,6 @@ namespace BeeVPN
 
                 _bridge = new TunSocksBridge(coreSocksPort);
                 _bridge.Log += message => Log("TUN", message);
-                _bridge.BytesTransferred += (rx, tx) => BytesTransferred?.Invoke(rx, tx);
                 _bridge.Start();
 
                 if (!StartTun2Socks())
@@ -224,7 +224,18 @@ namespace BeeVPN
 
                 StartMonitor();
 
-                lock (_sync) { _active = true; }
+                bool cancelled;
+                lock (_sync)
+                {
+                    cancelled = _stopping || token.IsCancellationRequested;
+                    if (!cancelled) _active = true;
+                }
+                if (cancelled)
+                {
+                    // Stop() was called while DNS/routes were being applied; unwind
+                    // instead of leaving a tunnel running that the UI already closed.
+                    return FailStart();
+                }
 
                 Log("TUN", $"Full-device tunnel active. {_routedIps.Count} tunnel endpoints pinned to the physical gateway.");
                 _ = ProbeTunnelAsync();
@@ -461,6 +472,9 @@ namespace BeeVPN
             string script = $@"
                 $ErrorActionPreference = 'Stop'
                 New-NetIPAddress -InterfaceAlias '{AdapterName}' -IPAddress '{TunAddress}' -PrefixLength {TunPrefixLength} -ErrorAction SilentlyContinue | Out-Null
+                # IPv6 must be bound so the default IPv6 routes below can be installed;
+                # otherwise native IPv6 escapes the tunnel entirely.
+                New-NetIPAddress -InterfaceAlias '{AdapterName}' -IPAddress '{TunAddressV6}' -PrefixLength {TunPrefixLengthV6} -ErrorAction SilentlyContinue | Out-Null
                 Set-NetIPInterface -InterfaceAlias '{AdapterName}' -InterfaceMetric 1 -ErrorAction SilentlyContinue | Out-Null
                 'configured'
             ";
@@ -476,9 +490,10 @@ namespace BeeVPN
 
         private void RemoveTunAddress()
         {
-            DnsManager.RunPowerShell(
-                $"Remove-NetIPAddress -InterfaceAlias '{AdapterName}' -IPAddress '{TunAddress}' -Confirm:$false -ErrorAction SilentlyContinue",
-                5000);
+            DnsManager.RunPowerShell($@"
+                Remove-NetIPAddress -InterfaceAlias '{AdapterName}' -IPAddress '{TunAddress}' -Confirm:$false -ErrorAction SilentlyContinue
+                Remove-NetIPAddress -InterfaceAlias '{AdapterName}' -IPAddress '{TunAddressV6}' -Confirm:$false -ErrorAction SilentlyContinue
+            ", 5000);
         }
 
         private bool DiscoverPhysicalRoute()
@@ -592,18 +607,40 @@ namespace BeeVPN
                 $ErrorActionPreference = 'Stop'
                 Remove-NetRoute -DestinationPrefix '0.0.0.0/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
                 Remove-NetRoute -DestinationPrefix '128.0.0.0/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
+                Remove-NetRoute -DestinationPrefix '::/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
+                Remove-NetRoute -DestinationPrefix '8000::/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
                 New-NetRoute -DestinationPrefix '0.0.0.0/1' -InterfaceAlias '{AdapterName}' -NextHop '0.0.0.0' -RouteMetric 1 -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
                 New-NetRoute -DestinationPrefix '128.0.0.0/1' -InterfaceAlias '{AdapterName}' -NextHop '0.0.0.0' -RouteMetric 1 -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
-                'ok'
+                # Capture native IPv6 as well. tun2socks forwards IPv4 only, so IPv6
+                # blackholes instead of leaking around the tunnel; apps fall back to IPv4.
+                $v6 = 0
+                try {{
+                    New-NetRoute -DestinationPrefix '::/1' -InterfaceAlias '{AdapterName}' -NextHop '::' -RouteMetric 1 -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
+                    New-NetRoute -DestinationPrefix '8000::/1' -InterfaceAlias '{AdapterName}' -NextHop '::' -RouteMetric 1 -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
+                    $v6 = 1
+                }} catch {{ $v6 = 0 }}
+                'ok/' + $v6
             ";
 
-            var (exitCode, stdout, stderr) = DnsManager.RunPowerShell(script, 10000);
+            var (exitCode, stdout, stderr) = DnsManager.RunPowerShell(script, 15000);
             if (exitCode != 0)
             {
                 Debug.WriteLine($"AddDefaultRoutes failed: {stderr}");
                 return false;
             }
-            return stdout.Contains("ok", StringComparison.OrdinalIgnoreCase);
+
+            string result = stdout.Trim();
+            if (!result.StartsWith("ok", StringComparison.OrdinalIgnoreCase)) return false;
+
+            if (result.EndsWith("/1", StringComparison.Ordinal))
+            {
+                Log("TUN", "IPv6 default routes installed; native IPv6 cannot bypass the tunnel.");
+            }
+            else
+            {
+                Log("TUN", "WARN: IPv6 default routes could not be installed; native IPv6 may leak.");
+            }
+            return true;
         }
 
         private void RemoveDefaultRoutes()
@@ -611,6 +648,8 @@ namespace BeeVPN
             DnsManager.RunPowerShell($@"
                 Remove-NetRoute -DestinationPrefix '0.0.0.0/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
                 Remove-NetRoute -DestinationPrefix '128.0.0.0/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
+                Remove-NetRoute -DestinationPrefix '::/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
+                Remove-NetRoute -DestinationPrefix '8000::/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
             ", 8000);
         }
 
@@ -992,7 +1031,10 @@ namespace BeeVPN
                 DnsManager.RunPowerShell($@"
                     Remove-NetRoute -DestinationPrefix '0.0.0.0/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
                     Remove-NetRoute -DestinationPrefix '128.0.0.0/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
+                    Remove-NetRoute -DestinationPrefix '::/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
+                    Remove-NetRoute -DestinationPrefix '8000::/1' -InterfaceAlias '{AdapterName}' -Confirm:$false -ErrorAction SilentlyContinue
                     Remove-NetIPAddress -InterfaceAlias '{AdapterName}' -IPAddress '{TunAddress}' -Confirm:$false -ErrorAction SilentlyContinue
+                    Remove-NetIPAddress -InterfaceAlias '{AdapterName}' -IPAddress '{TunAddressV6}' -Confirm:$false -ErrorAction SilentlyContinue
                 ", 8000);
 
                 if (routes.Count > 0 && !string.IsNullOrEmpty(alias))

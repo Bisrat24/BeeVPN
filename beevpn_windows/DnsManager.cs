@@ -162,8 +162,9 @@ namespace BeeVPN
                     $count = 0
                     foreach ($alias in $aliases) {{
                         if ($alias -eq 'BeeVPN') {{ continue }}
+                        $safeAlias = $alias.Replace(""'"", ""''"")
                         try {{
-                            Set-DnsClientServerAddress -InterfaceAlias $alias -ServerAddresses ({serverList}) -ErrorAction Stop
+                            Set-DnsClientServerAddress -InterfaceAlias $safeAlias -ServerAddresses ({serverList}) -ErrorAction Stop
                             $count++
                         }} catch {{ }}
                     }}
@@ -193,11 +194,7 @@ namespace BeeVPN
                     }
                 }
 
-                bool allRestored = true;
-                foreach (var (alias, servers) in restoreMap)
-                {
-                    if (!RestoreInterface(alias, servers)) allRestored = false;
-                }
+                bool allRestored = RestoreInterfaces(restoreMap);
 
                 _isDnsOverridden = false;
                 if (!allRestored)
@@ -225,13 +222,7 @@ namespace BeeVPN
             {
                 if (!TryLoadBackup(out var persisted)) return;
 
-                bool allRestored = true;
-                foreach (var (alias, servers) in persisted)
-                {
-                    if (!RestoreInterface(alias, servers)) allRestored = false;
-                }
-
-                if (!allRestored)
+                if (!RestoreInterfaces(persisted))
                 {
                     Debug.WriteLine("DNS restore from backup was incomplete; keeping the backup.");
                     return;
@@ -246,30 +237,56 @@ namespace BeeVPN
             }
         }
 
-        private static bool RestoreInterface(string alias, string[] servers)
+        /// <summary>
+        /// Restores all captured adapters in a single PowerShell run. Spawning one
+        /// process per adapter made disconnect and startup take seconds per NIC.
+        /// </summary>
+        private static bool RestoreInterfaces(Dictionary<string, string[]> restoreMap)
         {
-            bool releaseToDhcp = servers != null && servers.Length == 1 && servers[0] == DhcpMarker;
-            string script;
-            if (releaseToDhcp)
-            {
-                script = $"Set-DnsClientServerAddress -InterfaceAlias '{alias}' -ResetServerAddresses -ErrorAction Stop";
-            }
-            else if (servers != null && servers.Length > 0)
-            {
-                string sList = "'" + string.Join("','", servers) + "'";
-                script = $"Set-DnsClientServerAddress -InterfaceAlias '{alias}' -ServerAddresses ({sList}) -ErrorAction Stop";
-            }
-            else
-            {
-                script = $"Set-DnsClientServerAddress -InterfaceAlias '{alias}' -ResetServerAddresses -ErrorAction Stop";
-            }
+            if (restoreMap.Count == 0) return true;
 
-            var (exitCode, _, stderr) = RunPowerShell(script, 4000);
+            var lines = new List<string> { "$ok = 0; $fail = 0" };
+            foreach (var pair in restoreMap)
+            {
+                string alias = pair.Key.Replace("'", "''");
+                string[]? servers = pair.Value;
+
+                bool releaseToDhcp = servers == null || servers.Length == 0 ||
+                                     (servers.Length == 1 && servers[0] == DhcpMarker);
+
+                if (releaseToDhcp)
+                {
+                    lines.Add($"try {{ Set-DnsClientServerAddress -InterfaceAlias '{alias}' -ResetServerAddresses -ErrorAction Stop; $ok++ }} catch {{ $fail++ }}");
+                }
+                else
+                {
+                    var quoted = new List<string>(servers!.Length);
+                    foreach (string server in servers)
+                    {
+                        quoted.Add("'" + server.Replace("'", "''") + "'");
+                    }
+                    lines.Add($"try {{ Set-DnsClientServerAddress -InterfaceAlias '{alias}' -ServerAddresses ({string.Join(",", quoted)}) -ErrorAction Stop; $ok++ }} catch {{ $fail++ }}");
+                }
+            }
+            lines.Add("$ok.ToString() + '/' + $fail.ToString()");
+
+            var (exitCode, stdout, stderr) = RunPowerShell(string.Join("\n", lines), 15000);
             if (exitCode != 0)
             {
-                Debug.WriteLine($"DNS restore for {alias} failed: {stderr}");
+                Debug.WriteLine($"DNS restore failed (exit code {exitCode}): {stderr}");
+                return false;
             }
-            return exitCode == 0;
+
+            string[] counts = stdout.Trim().Split('/');
+            if (counts.Length != 2 ||
+                !int.TryParse(counts[0], out int ok) ||
+                !int.TryParse(counts[1], out int fail))
+            {
+                Debug.WriteLine($"Unexpected DNS restore output: {stdout}");
+                return false;
+            }
+
+            return fail == 0 && ok > 0;
         }
 
         private static Dictionary<string, string[]> ParseAliasMap(string output)

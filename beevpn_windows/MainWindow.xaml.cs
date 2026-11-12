@@ -28,6 +28,8 @@ namespace BeeVPN
         private bool _fullTunnelFallback = false;
         private bool _isIntentionalStop = false;
         private bool _suppressOptionSave = false;
+        private bool _isExiting = false;
+        private System.Threading.Tasks.Task? _stopTask;
 
         private long _rxBytes = 0;
         private long _txBytes = 0;
@@ -57,7 +59,6 @@ namespace BeeVPN
             _wintunTunnel = new WintunTunnelManager();
             _wintunTunnel.LogMessage += OnTunnelLog;
             _wintunTunnel.Failed += OnWintunFailed;
-            _wintunTunnel.BytesTransferred += OnBytesTransferred;
 
             _statsTimer = new DispatcherTimer
             {
@@ -202,6 +203,8 @@ namespace BeeVPN
 
         private void ExitApplication()
         {
+            if (_isExiting) return;
+
             if (_isConnected || _isConnecting)
             {
                 var result = System.Windows.MessageBox.Show(
@@ -213,15 +216,38 @@ namespace BeeVPN
                 if (result != MessageBoxResult.Yes) return;
             }
 
+            _isExiting = true;
             DisconnectVpn();
+
+            // DisconnectVpn tears the Wintun stack down in the background; stop the
+            // core synchronously here so exiting the window cannot orphan it.
+            try { if (_wintunTunnel.IsBusy) _wintunTunnel.Stop(); } catch { }
+            try { _tunnelManager.Stop(); } catch { }
+
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
             _trayMenu.Dispose();
             System.Windows.Application.Current.Shutdown();
         }
 
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        {
+            if (!_isExiting)
+            {
+                // Alt+F4 and the system menu behave like the close button: dock to
+                // the tray. Only ExitApplication shuts the app down.
+                e.Cancel = true;
+                MinimizeToTray();
+                return;
+            }
+            base.OnClosing(e);
+        }
+
         protected override void OnClosed(EventArgs e)
         {
+            try { if (_wintunTunnel.IsBusy) _wintunTunnel.Stop(); } catch { }
+            try { _tunnelManager.Stop(); } catch { }
+
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
             _trayMenu.Dispose();
@@ -329,7 +355,13 @@ namespace BeeVPN
         {
             bool canEdit = _selectedMode == 0 && !_isConnected && !_isConnecting;
             comboRegion.IsEnabled = canEdit;
-            comboProtocol.IsEnabled = canEdit;
+            // Full-device mode forces TCP-only tunneling, so the profile choice
+            // would not change what the core actually uses.
+            comboProtocol.IsEnabled = canEdit && !_fullTunnel;
+            comboProtocol.Opacity = comboProtocol.IsEnabled ? 1.0 : 0.45;
+            comboProtocol.ToolTip = _fullTunnel
+                ? "Full-device tunnel always uses TCP-only protocols."
+                : null;
             chkFullTunnel.IsEnabled = !_isConnected && !_isConnecting;
         }
 
@@ -341,6 +373,7 @@ namespace BeeVPN
             SplitTunnelManager.Settings.FullTunnel = _fullTunnel;
             SplitTunnelManager.SaveSettings();
             UpdateFullTunnelUi();
+            UpdateOptionAvailability();
 
             AppendLog("UI", _fullTunnel
                 ? "Full-device tunnel enabled: all apps will route through Wintun (requires Administrator)."
@@ -447,6 +480,7 @@ namespace BeeVPN
 
                 if (ElevationHelper.RelaunchElevated(new[] { "--autoconnect" }))
                 {
+                    _isExiting = true;
                     _notifyIcon.Visible = false;
                     _notifyIcon.Dispose();
                     _trayMenu.Dispose();
@@ -462,6 +496,12 @@ namespace BeeVPN
                     "Approve the UAC prompt to use the full-device tunnel.",
                     Forms.ToolTipIcon.Warning
                 );
+                return;
+            }
+
+            if (_stopTask != null && !_stopTask.IsCompleted)
+            {
+                AppendLog("WARN", "Previous tunnel is still shutting down. Try again in a moment.");
                 return;
             }
 
@@ -541,7 +581,7 @@ namespace BeeVPN
                 {
                     // Removing hundreds of bypass routes can take seconds; keep the UI
                     // responsive and stop the core only after the TUN is torn down.
-                    System.Threading.Tasks.Task.Run(() =>
+                    _stopTask = System.Threading.Tasks.Task.Run(() =>
                     {
                         try { _wintunTunnel.Stop(); } catch { }
                         try { _tunnelManager.Stop(); } catch { }
@@ -715,6 +755,10 @@ namespace BeeVPN
 
         private void OnBytesTransferred(long received, long sent)
         {
+            // In full-tunnel mode the Wintun totals include these same bytes; adding
+            // them here double-counted throughput and raised the dispatcher per chunk.
+            if (_fullTunnel && !_fullTunnelFallback) return;
+
             Dispatcher.Invoke(() =>
             {
                 _rxBytes += received;
@@ -761,7 +805,7 @@ namespace BeeVPN
                 tvDuration.Text = string.Format("{0:D2}:{1:D2}:{2:D2}", (int)elapsed.TotalHours, elapsed.Minutes, elapsed.Seconds);
             }
 
-            if (_isConnected && _fullTunnel)
+            if (_isConnected && _fullTunnel && !_fullTunnelFallback)
             {
                 var (rx, tx) = _wintunTunnel.GetTotalBytes();
                 if (rx > _rxBytes) _rxBytes = rx;
