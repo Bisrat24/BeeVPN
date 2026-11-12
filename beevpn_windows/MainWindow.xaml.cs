@@ -57,6 +57,7 @@ namespace BeeVPN
             _wintunTunnel = new WintunTunnelManager();
             _wintunTunnel.LogMessage += OnTunnelLog;
             _wintunTunnel.Failed += OnWintunFailed;
+            _wintunTunnel.BytesTransferred += OnBytesTransferred;
 
             _statsTimer = new DispatcherTimer
             {
@@ -758,6 +759,22 @@ namespace BeeVPN
             {
                 var elapsed = DateTime.Now - _connectTime;
                 tvDuration.Text = string.Format("{0:D2}:{1:D2}:{2:D2}", (int)elapsed.TotalHours, elapsed.Minutes, elapsed.Seconds);
+            }
+
+            if (_isConnected && _fullTunnel)
+            {
+                var (rx, tx) = _wintunTunnel.GetTotalBytes();
+                if (rx > _rxBytes) _rxBytes = rx;
+                if (tx > _txBytes) _txBytes = tx;
+                tvDownload.Text = FormatTraffic(_rxBytes);
+                tvUpload.Text = FormatTraffic(_txBytes);
+            }
+
+            if (_isConnected)
+            {
+                string shortMode = _selectedMode == 0 ? (_fullTunnel ? "Full Tunnel" : "Psiphon") : "DNS Active";
+                string tip = $"BeeVPN: {shortMode} (↓{FormatTraffic(_rxBytes)} ↑{FormatTraffic(_txBytes)})";
+                if (tip.Length < 64) _notifyIcon.Text = tip;
             }
 
             if ((DateTime.Now - _lastLatencyCheck).TotalSeconds >= 5)

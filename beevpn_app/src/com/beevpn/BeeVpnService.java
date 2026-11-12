@@ -95,6 +95,8 @@ public class BeeVpnService extends VpnService {
     private long mStartTime = 0;
     private final java.util.concurrent.atomic.AtomicLong mRxBytes = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong mTxBytes = new java.util.concurrent.atomic.AtomicLong(0);
+    private long mUidRxBaseline = -1;
+    private long mUidTxBaseline = -1;
     private volatile int mMeasuredLatencyMs = -1;
     private long mLastLatencyCheck = 0;
     private String mLastStatusMsg = "Ready";
@@ -164,6 +166,8 @@ public class BeeVpnService extends VpnService {
         mStartTime = 0;
         mRxBytes.set(0);
         mTxBytes.set(0);
+        mUidRxBaseline = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid());
+        mUidTxBaseline = android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid());
         mMeasuredLatencyMs = -1;
         mLastLatencyCheck = 0;
         mShouldStop = false;
@@ -187,6 +191,16 @@ public class BeeVpnService extends VpnService {
             builder.addDnsServer("1.0.0.1");
             builder.addRoute("1.1.1.1", 32);
             builder.addRoute("1.0.0.1", 32);
+
+            // Prevent IPv6 DNS bypass on dual-stack carrier networks
+            try {
+                builder.addAddress("fd00::2", 128);
+                builder.addDnsServer("2606:4700:4700::1111");
+                builder.addDnsServer("2606:4700:4700::1001");
+                builder.addRoute("2606:4700:4700::1111", 128);
+                builder.addRoute("2606:4700:4700::1001", 128);
+            } catch (Exception ignored) {}
+
             // DNS mode must cover every app's resolver traffic; split-tunnel selections do not apply.
             try {
                 builder.addDisallowedApplication(getPackageName());
@@ -234,9 +248,8 @@ public class BeeVpnService extends VpnService {
                     mTxBytes.addAndGet(length);
 
                     int version = (packet[0] >> 4) & 0x0F;
-                    int protocol = packet[9] & 0xFF;
 
-                    if (version == 4 && protocol == 17) { // IPv4 UDP
+                    if (version == 4 && (packet[9] & 0xFF) == 17) { // IPv4 UDP
                         int ipHdrLen = (packet[0] & 0x0F) * 4;
                         int srcPort = ((packet[ipHdrLen] & 0xFF) << 8) | (packet[ipHdrLen + 1] & 0xFF);
                         int dstPort = ((packet[ipHdrLen + 2] & 0xFF) << 8) | (packet[ipHdrLen + 3] & 0xFF);
@@ -258,6 +271,37 @@ public class BeeVpnService extends VpnService {
                                     mRxBytes.addAndGet(response.length);
                                     byte[] respIpPacket = buildUdpResponse(
                                             rawPacketCopy, ipHdrLen,
+                                            dstPort, srcPort,
+                                            response, response.length
+                                    );
+                                    synchronized (out) {
+                                        out.write(respIpPacket);
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                            });
+                        }
+                    } else if (version == 6 && length >= 48 && (packet[6] & 0xFF) == 17) { // IPv6 UDP
+                        int srcPort = ((packet[40] & 0xFF) << 8) | (packet[41] & 0xFF);
+                        int dstPort = ((packet[42] & 0xFF) << 8) | (packet[43] & 0xFF);
+                        int udpLen = ((packet[44] & 0xFF) << 8) | (packet[45] & 0xFF);
+
+                        if (dstPort == 53 && udpLen > 8 && 40 + udpLen <= length) {
+                            int dnsLen = udpLen - 8;
+                            byte[] query = new byte[dnsLen];
+                            System.arraycopy(packet, 48, query, 0, dnsLen);
+
+                            byte[] rawPacketCopy = new byte[48];
+                            System.arraycopy(packet, 0, rawPacketCopy, 0, 48);
+
+                            mDnsExecutor.execute(() -> {
+                                try {
+                                    byte[] response = resolveDnsQuery(query, dnsServer);
+                                    if (response == null) return;
+
+                                    mRxBytes.addAndGet(response.length);
+                                    byte[] respIpPacket = buildUdpV6Response(
+                                            rawPacketCopy,
                                             dstPort, srcPort,
                                             response, response.length
                                     );
@@ -465,6 +509,63 @@ public class BeeVpnService extends VpnService {
 
         // Payload
         System.arraycopy(payload, 0, resp, 28, payloadLen);
+        return resp;
+    }
+
+    private byte[] buildUdpV6Response(byte[] req, int srcPort, int dstPort, byte[] payload, int payloadLen) {
+        int udpLen = 8 + payloadLen;
+        int totalLen = 40 + udpLen;
+        byte[] resp = new byte[totalLen];
+
+        // IPv6 Header
+        resp[0] = 0x60;
+        resp[1] = 0x00;
+        resp[2] = 0x00;
+        resp[3] = 0x00;
+        resp[4] = (byte) ((udpLen >> 8) & 0xFF);
+        resp[5] = (byte) (udpLen & 0xFF);
+        resp[6] = 17;   // Next Header: UDP
+        resp[7] = 64;   // Hop Limit
+
+        // Swap Source & Dest IP addresses
+        System.arraycopy(req, 24, resp, 8, 16);  // Source = original Dest
+        System.arraycopy(req, 8, resp, 24, 16);  // Dest = original Source
+
+        // UDP Header
+        resp[40] = (byte) ((srcPort >> 8) & 0xFF);
+        resp[41] = (byte) (srcPort & 0xFF);
+        resp[42] = (byte) ((dstPort >> 8) & 0xFF);
+        resp[43] = (byte) (dstPort & 0xFF);
+        resp[44] = (byte) ((udpLen >> 8) & 0xFF);
+        resp[45] = (byte) (udpLen & 0xFF);
+        resp[46] = 0;
+        resp[47] = 0;
+
+        // Payload
+        System.arraycopy(payload, 0, resp, 48, payloadLen);
+
+        // IPv6 UDP Checksum (mandatory)
+        int sum = 0;
+        for (int i = 8; i < 24; i += 2) sum += ((resp[i] & 0xFF) << 8) | (resp[i + 1] & 0xFF);
+        for (int i = 24; i < 40; i += 2) sum += ((resp[i] & 0xFF) << 8) | (resp[i + 1] & 0xFF);
+        sum += (udpLen & 0xFFFF);
+        sum += 17;
+
+        for (int i = 40; i < totalLen; i += 2) {
+            if (i == 46) continue;
+            int val = (resp[i] & 0xFF) << 8;
+            if (i + 1 < totalLen) val |= (resp[i + 1] & 0xFF);
+            sum += val;
+        }
+
+        while ((sum >> 16) > 0) {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+        int csum = (~sum) & 0xFFFF;
+        if (csum == 0) csum = 0xFFFF;
+        resp[46] = (byte) ((csum >> 8) & 0xFF);
+        resp[47] = (byte) (csum & 0xFF);
+
         return resp;
     }
 
@@ -843,10 +944,22 @@ public class BeeVpnService extends VpnService {
                     }, "BeeVpn-Ping").start();
                 }
 
+                // Live physical traffic accounting fallback via Android kernel UID stats
+                if (sIsRunning) {
+                    long uidRx = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid());
+                    long uidTx = android.net.TrafficStats.getUidTxBytes(android.os.Process.myUid());
+                    if (uidRx != android.net.TrafficStats.UNSUPPORTED && uidTx != android.net.TrafficStats.UNSUPPORTED && mUidRxBaseline >= 0) {
+                        long rxDelta = Math.max(0, uidRx - mUidRxBaseline);
+                        long txDelta = Math.max(0, uidTx - mUidTxBaseline);
+                        if (rxDelta > mRxBytes.get()) mRxBytes.set(rxDelta);
+                        if (txDelta > mTxBytes.get()) mTxBytes.set(txDelta);
+                    }
+                }
+
                 broadcastStatus(sIsRunning, sIsConnecting, mLastStatusMsg);
                 if (sIsRunning) {
                     String prefix = sCurrentMode == MODE_PSIPHON ? "Protected" : "DNS Active";
-                    String stats = prefix + " (↓ " + formatBytes(mRxBytes.get()) + "  •  ↑ " + formatBytes(mTxBytes.get()) + ")";
+                    String stats = prefix + " • ↓ " + formatBytes(mRxBytes.get()) + "  ↑ " + formatBytes(mTxBytes.get());
                     updateNotification("BeeVPN Connected", stats);
                 }
                 mHandler.postDelayed(this, 1000);

@@ -25,7 +25,7 @@ namespace BeeVPN
         private static readonly TimeSpan DnsTimeout = TimeSpan.FromSeconds(4);
 
         private readonly int _upstreamSocksPort;
-        private readonly SemaphoreSlim _dnsConcurrency = new(64, 64);
+        private readonly SemaphoreSlim _dnsConcurrency = new(128, 128);
 
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
@@ -33,9 +33,14 @@ namespace BeeVPN
         private int _preferredResolver;
         private int _droppedUdp;
         private bool _disposed;
+        private long _totalRxBytes;
+        private long _totalTxBytes;
 
         public int Port { get; private set; }
         public event Action<string>? Log;
+        public event Action<long, long>? BytesTransferred;
+
+        public (long rx, long tx) GetTotalBytes() => (Interlocked.Read(ref _totalRxBytes), Interlocked.Read(ref _totalTxBytes));
 
         public TunSocksBridge(int upstreamSocksPort)
         {
@@ -189,8 +194,8 @@ namespace BeeVPN
                 await WriteReplyAsync(clientStream, 0x00, token);
 
                 NetworkStream upstreamStream = upstream.GetStream();
-                var toUpstream = CopyAsync(clientStream, upstreamStream, token);
-                var toClient = CopyAsync(upstreamStream, clientStream, token);
+                var toUpstream = CopyCountingAsync(clientStream, upstreamStream, false, token);
+                var toClient = CopyCountingAsync(upstreamStream, clientStream, true, token);
                 await Task.WhenAny(toUpstream, toClient);
             }
             catch (OperationCanceledException)
@@ -292,7 +297,7 @@ namespace BeeVPN
             bool acquired;
             try
             {
-                acquired = await _dnsConcurrency.WaitAsync(TimeSpan.FromSeconds(2), token);
+                acquired = await _dnsConcurrency.WaitAsync(TimeSpan.FromSeconds(5), token);
             }
             catch (OperationCanceledException)
             {
@@ -323,8 +328,14 @@ namespace BeeVPN
 
             try
             {
+                Interlocked.Add(ref _totalTxBytes, query.Length);
+                BytesTransferred?.Invoke(0, query.Length);
+
                 byte[]? response = await ResolveOverTcpAsync(query, token);
                 response ??= BuildServFail(query);
+
+                Interlocked.Add(ref _totalRxBytes, response.Length);
+                BytesTransferred?.Invoke(response.Length, 0);
 
                 var reply = new byte[headerLength + response.Length];
                 Buffer.BlockCopy(datagram, 0, reply, 0, headerLength);
@@ -552,14 +563,34 @@ namespace BeeVPN
             return response;
         }
 
-        private static async Task CopyAsync(Stream from, Stream to, CancellationToken token)
+        private async Task CopyCountingAsync(Stream from, Stream to, bool isRx, CancellationToken token)
         {
+            byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(32768);
             try
             {
-                await from.CopyToAsync(to, token);
+                while (!token.IsCancellationRequested)
+                {
+                    int bytesRead = await from.ReadAsync(buffer.AsMemory(0, buffer.Length), token);
+                    if (bytesRead <= 0) break;
+                    await to.WriteAsync(buffer.AsMemory(0, bytesRead), token);
+                    if (isRx)
+                    {
+                        Interlocked.Add(ref _totalRxBytes, bytesRead);
+                        BytesTransferred?.Invoke(bytesRead, 0);
+                    }
+                    else
+                    {
+                        Interlocked.Add(ref _totalTxBytes, bytesRead);
+                        BytesTransferred?.Invoke(0, bytesRead);
+                    }
+                }
             }
             catch
             {
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
             }
         }
 

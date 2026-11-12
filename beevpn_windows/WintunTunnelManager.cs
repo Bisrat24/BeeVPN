@@ -83,6 +83,32 @@ namespace BeeVPN
 
         public event Action<string, string>? LogMessage;
         public event Action<string>? Failed;
+        public event Action<long, long>? BytesTransferred;
+
+        public (long rx, long tx) GetTotalBytes()
+        {
+            long rx = 0, tx = 0;
+            if (_bridge != null)
+            {
+                var (bRx, bTx) = _bridge.GetTotalBytes();
+                rx = Math.Max(rx, bRx);
+                tx = Math.Max(tx, bTx);
+            }
+            try
+            {
+                var nic = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()
+                    .FirstOrDefault(n => n.Name.Equals(AdapterName, StringComparison.OrdinalIgnoreCase)
+                                      || n.Description.Contains("Wintun", StringComparison.OrdinalIgnoreCase));
+                if (nic != null)
+                {
+                    var ipStats = nic.GetIPStatistics();
+                    rx = Math.Max(rx, ipStats.BytesReceived);
+                    tx = Math.Max(tx, ipStats.BytesSent);
+                }
+            }
+            catch { }
+            return (rx, tx);
+        }
 
         public WintunTunnelManager(string? baseDir = null)
         {
@@ -137,6 +163,7 @@ namespace BeeVPN
 
                 _bridge = new TunSocksBridge(coreSocksPort);
                 _bridge.Log += message => Log("TUN", message);
+                _bridge.BytesTransferred += (rx, tx) => BytesTransferred?.Invoke(rx, tx);
                 _bridge.Start();
 
                 if (!StartTun2Socks())
@@ -458,12 +485,20 @@ namespace BeeVPN
         {
             string script = @"
                 $ErrorActionPreference = 'SilentlyContinue'
-                $virtualPattern = 'vEthernet|WSL|Hyper-V|VMware|VirtualBox|Docker|Loopback|Teredo|isatap|Bluetooth|Npcap'
+                $virtualPattern = 'vEthernet|WSL|Hyper-V|VMware|VirtualBox|Docker|Loopback|Teredo|isatap|Bluetooth|Npcap|TAP|VPN'
                 function Get-BestRoute($excludeVirtual) {
                     Get-NetRoute -DestinationPrefix '0.0.0.0/0' -AddressFamily IPv4 |
                         Where-Object {
-                            $_.InterfaceAlias -ne 'BeeVPN' -and
-                            (-not $excludeVirtual -or $_.InterfaceAlias -notmatch $virtualPattern)
+                            if ($_.InterfaceAlias -eq 'BeeVPN') { return $false }
+                            if ($excludeVirtual) {
+                                if ($_.InterfaceAlias -match $virtualPattern) { return $false }
+                                $ad = Get-NetAdapter -Name $_.InterfaceAlias -ErrorAction SilentlyContinue | Select-Object -First 1
+                                if ($ad) {
+                                    if ($ad.InterfaceDescription -match $virtualPattern) { return $false }
+                                    if ($ad.Virtual -eq $true) { return $false }
+                                }
+                            }
+                            return $true
                         } |
                         ForEach-Object {
                             $ip = Get-NetIPInterface -InterfaceAlias $_.InterfaceAlias -AddressFamily IPv4 |
