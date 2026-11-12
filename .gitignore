@@ -1,6 +1,8 @@
 # Temporary build artifacts & intermediate files
 *.apk.idsig
 beevpn_unaligned.apk
+BeeVpn.apk
+BeeVPN-Windows/
 compiled_res.zip
 base.apk
 test_data/

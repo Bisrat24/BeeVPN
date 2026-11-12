@@ -18,6 +18,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.Closeable;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -29,8 +30,14 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
 
 import ca.psiphon.PsiphonTunnel;
 import ca.psiphon.Tun2SocksJniLoader;
@@ -58,6 +65,10 @@ public class BeeVpnService extends VpnService {
     private static final int NOTIFICATION_ID = 7701;
     private static final int NOTIFICATION_DISCONNECTED_ID = 7702;
 
+    private static final String PREFS_NAME = "beevpn_prefs";
+    private static final String PREF_EGRESS_REGION = "egress_region";
+    private static final String PREF_FAST_PROTOCOLS = "fast_protocols";
+
     private static volatile boolean sIsRunning = false;
     private static volatile boolean sIsConnecting = false;
     private static volatile int sCurrentMode = MODE_PSIPHON;
@@ -72,6 +83,14 @@ public class BeeVpnService extends VpnService {
     private volatile boolean mIsTunnelConnected = false;
     private Runnable mConnectTimeoutRunnable = null;
     private java.util.concurrent.ExecutorService mDnsExecutor = null;
+
+    private static final String DOT_HOST = "cloudflare-dns.com";
+    private static final String DOT_SERVER = "1.1.1.1";
+    private static final int DOT_PORT = 853;
+    private final ThreadLocal<DnsOverTls> mDotResolvers = new ThreadLocal<>();
+    private final Set<DnsOverTls> mOpenDotResolvers =
+            Collections.newSetFromMap(new ConcurrentHashMap<DnsOverTls, Boolean>());
+    private volatile boolean mDotHealthy = false;
 
     private long mStartTime = 0;
     private final java.util.concurrent.atomic.AtomicLong mRxBytes = new java.util.concurrent.atomic.AtomicLong(0);
@@ -205,8 +224,8 @@ public class BeeVpnService extends VpnService {
             byte[] packet = new byte[32768];
 
             try {
-                InetAddress dnsServer = InetAddress.getByName("1.1.1.1");
-                LogManager.log("DNS", "DNS worker active. Forwarding queries to 1.1.1.1 via parallel pool.");
+                InetAddress dnsServer = InetAddress.getByName(DOT_SERVER);
+                LogManager.log("DNS", "DNS worker active. Queries use DNS-over-TLS with UDP/53 fallback.");
 
                 while (!mShouldStop) {
                     int length = in.read(packet);
@@ -232,33 +251,20 @@ public class BeeVpnService extends VpnService {
                             System.arraycopy(packet, 0, rawPacketCopy, 0, rawPacketCopy.length);
 
                             mDnsExecutor.execute(() -> {
-                                DatagramSocket socket = null;
                                 try {
-                                    socket = new DatagramSocket();
-                                    protect(socket);
-                                    socket.setSoTimeout(3000);
+                                    byte[] response = resolveDnsQuery(query, dnsServer);
+                                    if (response == null) return;
 
-                                    DatagramPacket outPacket = new DatagramPacket(query, query.length, dnsServer, 53);
-                                    socket.send(outPacket);
-
-                                    byte[] respBuf = new byte[4096];
-                                    DatagramPacket inPacket = new DatagramPacket(respBuf, respBuf.length);
-                                    socket.receive(inPacket);
-
-                                    int respDnsLen = inPacket.getLength();
-                                    mRxBytes.addAndGet(respDnsLen);
-
+                                    mRxBytes.addAndGet(response.length);
                                     byte[] respIpPacket = buildUdpResponse(
                                             rawPacketCopy, ipHdrLen,
                                             dstPort, srcPort,
-                                            respBuf, respDnsLen
+                                            response, response.length
                                     );
                                     synchronized (out) {
                                         out.write(respIpPacket);
                                     }
                                 } catch (Exception ignored) {
-                                } finally {
-                                    if (socket != null) socket.close();
                                 }
                             });
                         }
@@ -276,6 +282,141 @@ public class BeeVpnService extends VpnService {
             }
         }, "BeeVpn-DnsWorker");
         mWorkerThread.start();
+    }
+
+    private byte[] resolveDnsQuery(byte[] query, InetAddress dnsServer) {
+        DnsOverTls resolver = mDotResolvers.get();
+        if (resolver == null) {
+            resolver = new DnsOverTls();
+            mDotResolvers.set(resolver);
+            mOpenDotResolvers.add(resolver);
+        }
+
+        byte[] response = resolver.resolve(query);
+        if (response != null) {
+            if (!mDotHealthy) {
+                mDotHealthy = true;
+                LogManager.log("DNS", "DNS-over-TLS established with " + DOT_HOST + " (" + DOT_SERVER + ":" + DOT_PORT + ").");
+            }
+            return response;
+        }
+
+        if (mDotHealthy) {
+            mDotHealthy = false;
+            LogManager.log("DNS", "DNS-over-TLS unavailable. Falling back to plaintext UDP/53.");
+        }
+        return resolveUdp(query, dnsServer);
+    }
+
+    private byte[] resolveUdp(byte[] query, InetAddress dnsServer) {
+        DatagramSocket socket = null;
+        try {
+            socket = new DatagramSocket();
+            protect(socket);
+            socket.setSoTimeout(3000);
+
+            socket.send(new DatagramPacket(query, query.length, dnsServer, 53));
+            byte[] respBuf = new byte[4096];
+            DatagramPacket inPacket = new DatagramPacket(respBuf, respBuf.length);
+            socket.receive(inPacket);
+
+            byte[] response = new byte[inPacket.getLength()];
+            System.arraycopy(respBuf, 0, response, 0, response.length);
+            return response;
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (socket != null) socket.close();
+        }
+    }
+
+    private void closeDotResolvers() {
+        for (DnsOverTls resolver : mOpenDotResolvers) {
+            resolver.close();
+        }
+        mOpenDotResolvers.clear();
+    }
+
+    private final class DnsOverTls implements Closeable {
+        private Socket mRawSocket;
+        private SSLSocket mSocket;
+        private InputStream mIn;
+        private OutputStream mOut;
+
+        synchronized byte[] resolve(byte[] query) {
+            if (query.length == 0 || query.length > 65535) return null;
+
+            for (int attempt = 0; attempt < 2; attempt++) {
+                try {
+                    connect();
+                    mOut.write((query.length >> 8) & 0xFF);
+                    mOut.write(query.length & 0xFF);
+                    mOut.write(query);
+                    mOut.flush();
+
+                    int hi = mIn.read();
+                    int lo = mIn.read();
+                    if (hi < 0 || lo < 0) throw new IOException("DNS-over-TLS stream closed");
+                    int length = (hi << 8) | lo;
+                    if (length <= 0) throw new IOException("Invalid DNS-over-TLS response length");
+
+                    byte[] response = new byte[length];
+                    readFully(mIn, response, response.length);
+                    return response;
+                } catch (Exception e) {
+                    closeQuietly();
+                }
+            }
+            return null;
+        }
+
+        private void connect() throws IOException {
+            if (mSocket != null && !mSocket.isClosed()) return;
+
+            mRawSocket = new Socket();
+            mRawSocket.connect(new InetSocketAddress(DOT_SERVER, DOT_PORT), 4000);
+            protect(mRawSocket);
+
+            SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
+            SSLSocket socket = (SSLSocket) factory.createSocket(
+                    mRawSocket, DOT_HOST, DOT_PORT, true);
+            socket.setSoTimeout(4000);
+
+            // Layering over the connected IP socket keeps certificate checks and
+            // SNI bound to the DoT host name (1.1.1.1 is only the transport).
+            SSLParameters params = socket.getSSLParameters();
+            params.setEndpointIdentificationAlgorithm("HTTPS");
+            socket.setSSLParameters(params);
+            socket.startHandshake();
+
+            mSocket = socket;
+            mIn = socket.getInputStream();
+            mOut = socket.getOutputStream();
+        }
+
+        @Override
+        public void close() {
+            // Never wait for an in-flight query: closing the sockets unblocks it.
+            try {
+                if (mSocket != null) mSocket.close();
+            } catch (Exception ignored) {}
+            try {
+                if (mRawSocket != null) mRawSocket.close();
+            } catch (Exception ignored) {}
+        }
+
+        private void closeQuietly() {
+            try {
+                if (mSocket != null) mSocket.close();
+            } catch (Exception ignored) {}
+            try {
+                if (mRawSocket != null) mRawSocket.close();
+            } catch (Exception ignored) {}
+            mSocket = null;
+            mRawSocket = null;
+            mIn = null;
+            mOut = null;
+        }
     }
 
     private byte[] buildUdpResponse(byte[] req, int reqIpHdrLen, int srcPort, int dstPort, byte[] payload, int payloadLen) {
@@ -335,6 +476,14 @@ public class BeeVpnService extends VpnService {
             mSocksPort = 0;
             mLastStatusMsg = "Connecting to Psiphon...";
             LogManager.log("PSIPHON", "Initializing Psiphon Tunnel Core v495...");
+            SharedPreferences startPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            String startRegion = startPrefs.getString(PREF_EGRESS_REGION, "");
+            LogManager.log("CORE", startRegion == null || startRegion.isEmpty()
+                    ? "Exit region: Auto (fastest available)"
+                    : "Exit region: " + startRegion);
+            if (startPrefs.getBoolean(PREF_FAST_PROTOCOLS, false)) {
+                LogManager.log("CORE", "Protocol profile: Fast (OSSH + TLS-OSSH, server tactics disabled)");
+            }
             updateNotification("BeeVPN Connecting", "Connecting to Psiphon network...");
             broadcastStatus(false, true, mLastStatusMsg);
 
@@ -365,7 +514,14 @@ public class BeeVpnService extends VpnService {
                         config.put("SponsorId", "67DDC3614847FCEA");
                         config.put("DataRootDirectory", getFilesDir().getAbsolutePath());
                         config.put("TunnelWholeDevice", 1);
-                        config.put("EgressRegion", "");
+                        SharedPreferences connPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                        String egressRegion = connPrefs.getString(PREF_EGRESS_REGION, "");
+                        config.put("EgressRegion", egressRegion == null ? "" : egressRegion);
+                        if (connPrefs.getBoolean(PREF_FAST_PROTOCOLS, false)) {
+                            config.put("LimitTunnelProtocols", new JSONArray().put("OSSH").put("TLS-OSSH"));
+                            // Tactics can re-enable WebRTC inproxies and override the limit above.
+                            config.put("DisableTactics", true);
+                        }
                         config.put("EmitDiagnosticNotices", true);
                         config.put("EmitDiagnosticNetworkParameters", true);
                         config.put("EmitBytesTransferred", true);
@@ -798,6 +954,7 @@ public class BeeVpnService extends VpnService {
         }
 
         if (mDnsExecutor != null) {
+            closeDotResolvers();
             mDnsExecutor.shutdownNow();
             mDnsExecutor = null;
         }

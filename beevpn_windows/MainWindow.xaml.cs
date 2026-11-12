@@ -16,6 +16,7 @@ namespace BeeVPN
     public partial class MainWindow : Window
     {
         private readonly TunnelProcessManager _tunnelManager;
+        private readonly WintunTunnelManager _wintunTunnel;
         private readonly DispatcherTimer _statsTimer;
         private readonly DispatcherTimer _connectTimeoutTimer;
         private DateTime _connectTime;
@@ -23,7 +24,10 @@ namespace BeeVPN
         private bool _isConnected = false;
         private bool _isConnecting = false;
         private bool _isSplitTunnel = false;
+        private bool _fullTunnel = false;
+        private bool _fullTunnelFallback = false;
         private bool _isIntentionalStop = false;
+        private bool _suppressOptionSave = false;
 
         private long _rxBytes = 0;
         private long _txBytes = 0;
@@ -48,6 +52,11 @@ namespace BeeVPN
             _tunnelManager.TunnelConnected += OnTunnelConnected;
             _tunnelManager.BytesTransferred += OnBytesTransferred;
             _tunnelManager.TunnelDisconnected += OnTunnelDisconnected;
+            _tunnelManager.RegionsAvailable += OnRegionsAvailable;
+
+            _wintunTunnel = new WintunTunnelManager();
+            _wintunTunnel.LogMessage += OnTunnelLog;
+            _wintunTunnel.Failed += OnWintunFailed;
 
             _statsTimer = new DispatcherTimer
             {
@@ -62,7 +71,11 @@ namespace BeeVPN
             _connectTimeoutTimer.Tick += ConnectTimeoutTimer_Tick;
 
             _isSplitTunnel = SplitTunnelManager.Settings.IsSplitTunnel;
+            _fullTunnel = SplitTunnelManager.Settings.FullTunnel;
+            chkFullTunnel.IsChecked = _fullTunnel;
             UpdateSplitTunnelUi();
+            UpdateFullTunnelUi();
+            InitializeConnectionOptions();
 
             // Initialize System Tray Menu
             _trayMenu = new Forms.ContextMenuStrip();
@@ -119,6 +132,7 @@ namespace BeeVPN
             };
 
             // Recover Internet Settings captured before a crash or forced termination
+            WintunTunnelManager.CleanupStaleState();
             ProxyManager.RestoreBackupIfAny();
             DnsManager.RestoreBackupIfAny();
             ProxyManager.CleanOrphanedProxy();
@@ -126,6 +140,24 @@ namespace BeeVPN
             UpdateUiState();
             AppendLog("CORE", "BeeVPN Windows Edition initialized.");
             AppendLog("CORE", "Pre-seeded broker tactics & 405 verified servers active.");
+
+            if (HasCommandLineArg("--autoconnect"))
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    AppendLog("UI", "Elevated restart detected. Reconnecting...");
+                    ConnectVpn();
+                }), DispatcherPriority.Background);
+            }
+        }
+
+        private static bool HasCommandLineArg(string arg)
+        {
+            foreach (string value in Environment.GetCommandLineArgs())
+            {
+                if (string.Equals(value, arg, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
         }
 
         private void TitleBar_MouseDown(object sender, MouseButtonEventArgs e)
@@ -202,8 +234,7 @@ namespace BeeVPN
             _selectedMode = comboMode.SelectedIndex;
             if (_selectedMode == 0)
             {
-                tvServerTitle.Text = "Psiphon Fleet (Auto)";
-                tvServerSub.Text = "Global obfuscated circumvention network";
+                UpdateServerCard();
                 cardAppRouting.Visibility = Visibility.Visible;
                 AppendLog("UI", "Selected mode: Psiphon Circumvention (Global Bypass)");
             }
@@ -214,6 +245,183 @@ namespace BeeVPN
                 cardAppRouting.Visibility = Visibility.Collapsed;
                 AppendLog("UI", "Selected mode: Cloudflare DNS (1.1.1.1 Fast)");
             }
+            UpdateOptionAvailability();
+        }
+
+        private void InitializeConnectionOptions()
+        {
+            _suppressOptionSave = true;
+
+            comboRegion.Items.Clear();
+            comboRegion.Items.Add(CreateOptionItem("Auto (Fastest)"));
+            foreach (string region in TunnelProcessManager.GetEmbeddedRegions())
+            {
+                comboRegion.Items.Add(CreateOptionItem(region));
+            }
+
+            string savedRegion = SplitTunnelManager.Settings.EgressRegion;
+            comboRegion.SelectedIndex = 0;
+            if (!string.IsNullOrEmpty(savedRegion))
+            {
+                foreach (var item in comboRegion.Items)
+                {
+                    if (item is ComboBoxItem option &&
+                        string.Equals(option.Content as string, savedRegion, StringComparison.OrdinalIgnoreCase))
+                    {
+                        comboRegion.SelectedItem = option;
+                        break;
+                    }
+                }
+            }
+
+            comboProtocol.SelectedIndex = SplitTunnelManager.Settings.FastProtocols ? 0 : 1;
+            _suppressOptionSave = false;
+
+            UpdateServerCard();
+            UpdateOptionAvailability();
+        }
+
+        private static ComboBoxItem CreateOptionItem(string text)
+        {
+            return new ComboBoxItem
+            {
+                Content = text,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xFF, 0xFF)),
+                Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22))
+            };
+        }
+
+        private string GetSelectedRegion()
+        {
+            if (comboRegion.SelectedItem is ComboBoxItem item &&
+                item.Content is string text &&
+                !string.Equals(text, "Auto (Fastest)", StringComparison.Ordinal))
+            {
+                return text;
+            }
+            return "";
+        }
+
+        private bool IsFastProfileSelected()
+        {
+            return comboProtocol.SelectedIndex == 0;
+        }
+
+        private void UpdateServerCard()
+        {
+            if (_selectedMode != 0) return;
+
+            string region = GetSelectedRegion();
+            if (string.IsNullOrEmpty(region))
+            {
+                tvServerTitle.Text = "Psiphon Fleet (Auto)";
+                tvServerSub.Text = "Global obfuscated circumvention network";
+            }
+            else
+            {
+                tvServerTitle.Text = $"Psiphon Fleet ({region})";
+                tvServerSub.Text = $"Exit region pinned to {region}";
+            }
+        }
+
+        private void UpdateOptionAvailability()
+        {
+            bool canEdit = _selectedMode == 0 && !_isConnected && !_isConnecting;
+            comboRegion.IsEnabled = canEdit;
+            comboProtocol.IsEnabled = canEdit;
+            chkFullTunnel.IsEnabled = !_isConnected && !_isConnecting;
+        }
+
+        private void ChkFullTunnel_Changed(object sender, RoutedEventArgs e)
+        {
+            if (!IsLoaded) return;
+
+            _fullTunnel = chkFullTunnel.IsChecked == true;
+            SplitTunnelManager.Settings.FullTunnel = _fullTunnel;
+            SplitTunnelManager.SaveSettings();
+            UpdateFullTunnelUi();
+
+            AppendLog("UI", _fullTunnel
+                ? "Full-device tunnel enabled: all apps will route through Wintun (requires Administrator)."
+                : "Full-device tunnel disabled: traffic uses the Windows system proxy or split tunnel.");
+        }
+
+        private void UpdateFullTunnelUi()
+        {
+            if (tvFullTunnelHint != null)
+            {
+                bool admin = ElevationHelper.IsAdministrator;
+                if (!_fullTunnel)
+                {
+                    tvFullTunnelHint.Text = "Routes every app through the encrypted tunnel via Wintun.";
+                    tvFullTunnelHint.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x66, 0x66, 0x66));
+                }
+                else if (admin)
+                {
+                    tvFullTunnelHint.Text = "All apps tunneled over TCP; DNS is proxied, other UDP is dropped.";
+                    tvFullTunnelHint.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
+                }
+                else
+                {
+                    tvFullTunnelHint.Text = "Administrator approval will be requested on connect.";
+                    tvFullTunnelHint.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xB8, 0x00));
+                }
+            }
+
+            cardAppRouting.IsEnabled = !_fullTunnel;
+            cardAppRouting.Opacity = _fullTunnel ? 0.4 : 1.0;
+        }
+
+        private void ComboRegion_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressOptionSave || !IsLoaded) return;
+
+            string region = GetSelectedRegion();
+            SplitTunnelManager.Settings.EgressRegion = region;
+            SplitTunnelManager.SaveSettings();
+
+            AppendLog("UI", string.IsNullOrEmpty(region)
+                ? "Exit region: Auto (fastest available)"
+                : $"Exit region: {region}");
+            UpdateServerCard();
+        }
+
+        private void ComboProtocol_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressOptionSave || !IsLoaded) return;
+
+            bool fast = IsFastProfileSelected();
+            SplitTunnelManager.Settings.FastProtocols = fast;
+            SplitTunnelManager.SaveSettings();
+
+            AppendLog("UI", fast
+                ? "Protocol profile: Fast (OSSH + TLS-OSSH, tactics disabled). May fail on heavily filtered networks."
+                : "Protocol profile: Compatible (all protocols, slower fallback under filtering).");
+        }
+
+        private void OnRegionsAvailable(List<string> regions)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var item in comboRegion.Items)
+                {
+                    if (item is ComboBoxItem option &&
+                        option.Content is string text &&
+                        !string.Equals(text, "Auto (Fastest)", StringComparison.Ordinal))
+                    {
+                        existing.Add(text);
+                    }
+                }
+
+                foreach (string region in regions)
+                {
+                    if (existing.Add(region))
+                    {
+                        comboRegion.Items.Add(CreateOptionItem(region));
+                    }
+                }
+            });
         }
 
         private void BtnToggleVpn_Click(object sender, RoutedEventArgs e)
@@ -230,9 +438,36 @@ namespace BeeVPN
 
         private void ConnectVpn()
         {
+            if (_selectedMode == 0 && _fullTunnel && !ElevationHelper.IsAdministrator)
+            {
+                AppendLog("TUN", "Full-device tunnel needs administrator rights. Requesting elevation...");
+
+                App.ReleaseInstanceMutex();
+
+                if (ElevationHelper.RelaunchElevated(new[] { "--autoconnect" }))
+                {
+                    _notifyIcon.Visible = false;
+                    _notifyIcon.Dispose();
+                    _trayMenu.Dispose();
+                    System.Windows.Application.Current.Shutdown();
+                    return;
+                }
+
+                App.ReacquireInstanceMutex();
+                AppendLog("ERROR", "Elevation was declined. Disable full-device tunnel or restart BeeVPN as Administrator.");
+                _notifyIcon.ShowBalloonTip(
+                    3000,
+                    "Administrator Required",
+                    "Approve the UAC prompt to use the full-device tunnel.",
+                    Forms.ToolTipIcon.Warning
+                );
+                return;
+            }
+
             _isConnecting = true;
             _isConnected = false;
             _isIntentionalStop = false;
+            _fullTunnelFallback = false;
             _rxBytes = 0;
             _txBytes = 0;
             _measuredLatency = -1;
@@ -244,8 +479,22 @@ namespace BeeVPN
 
             if (_selectedMode == 0)
             {
+                string region = GetSelectedRegion();
+                bool fast = IsFastProfileSelected();
                 AppendLog("CORE", "Starting Psiphon Circumvention Mode (Speed Optimized)...");
-                _tunnelManager.Start();
+                if (!string.IsNullOrEmpty(region))
+                {
+                    AppendLog("CORE", $"Exit region pinned to {region}.");
+                }
+                if (fast)
+                {
+                    AppendLog("CORE", "Protocol profile: Fast (OSSH + TLS-OSSH).");
+                }
+                if (_fullTunnel)
+                {
+                    AppendLog("TUN", "Full-device tunnel requested; the Wintun adapter starts once the core is connected.");
+                }
+                _tunnelManager.Start(region, fast, _fullTunnel);
                 _connectTimeoutTimer.Start();
             }
             else
@@ -287,8 +536,25 @@ namespace BeeVPN
 
             if (_selectedMode == 0)
             {
-                _tunnelManager.Stop();
-                ProxyManager.DisableSystemProxy();
+                if (_wintunTunnel.IsBusy)
+                {
+                    // Removing hundreds of bypass routes can take seconds; keep the UI
+                    // responsive and stop the core only after the TUN is torn down.
+                    System.Threading.Tasks.Task.Run(() =>
+                    {
+                        try { _wintunTunnel.Stop(); } catch { }
+                        try { _tunnelManager.Stop(); } catch { }
+                    });
+                }
+                else
+                {
+                    _tunnelManager.Stop();
+                }
+
+                if (ProxyManager.IsProxyActive)
+                {
+                    ProxyManager.DisableSystemProxy();
+                }
             }
             else
             {
@@ -327,14 +593,26 @@ namespace BeeVPN
                 _lastLatencyCheck = DateTime.MinValue;
                 _statsTimer.Start();
 
-                if (!_isSplitTunnel && _tunnelManager.HttpPort > 0)
+                if (_fullTunnel)
+                {
+                    if (ProxyManager.IsProxyActive)
+                    {
+                        ProxyManager.DisableSystemProxy();
+                    }
+                    AppendLog("TUN", "Core connected. Starting full-device tunnel...");
+                    TryStartFullTunnel();
+                }
+                else if (!_isSplitTunnel && _tunnelManager.HttpPort > 0)
                 {
                     ProxyManager.EnableSystemProxy("127.0.0.1", _tunnelManager.HttpPort);
                     AppendLog("PROXY", $"Windows System Proxy active on 127.0.0.1:{_tunnelManager.HttpPort} (apps that honor system proxy settings)");
                 }
                 else
                 {
-                    ProxyManager.DisableSystemProxy();
+                    if (ProxyManager.IsProxyActive)
+                    {
+                        ProxyManager.DisableSystemProxy();
+                    }
                     AppendLog("ROUTING", "Split Tunnel active: general PC traffic bypassed. Selected apps route via SOCKS5.");
                 }
 
@@ -355,6 +633,82 @@ namespace BeeVPN
             Dispatcher.Invoke(() =>
             {
                 tvDialogSocksInfo.Text = $"SOCKS5: 127.0.0.1:{socksPort} | HTTP: {httpPort}";
+
+                if (_isConnected && _fullTunnel && !_fullTunnelFallback)
+                {
+                    TryStartFullTunnel();
+                }
+            });
+        }
+
+        private void TryStartFullTunnel()
+        {
+            if (!_fullTunnel || _fullTunnelFallback || _wintunTunnel.IsBusy) return;
+
+            int socksPort = _tunnelManager.SocksPort;
+            if (socksPort <= 0) return;
+
+            _ = StartFullTunnelAsync(socksPort, GetSelectedRegion(), _tunnelManager.CorePid);
+        }
+
+        private async System.Threading.Tasks.Task StartFullTunnelAsync(int socksPort, string region, int corePid)
+        {
+            AppendLog("TUN", "Starting full-device tunnel (Wintun + tun2socks)...");
+
+            bool started = await System.Threading.Tasks.Task.Run(() => _wintunTunnel.Start(socksPort, region, corePid));
+
+            if (_isIntentionalStop || !_isConnected)
+            {
+                if (started)
+                {
+                    try { _wintunTunnel.Stop(); } catch { }
+                }
+                return;
+            }
+
+            if (started)
+            {
+                if (ProxyManager.IsProxyActive)
+                {
+                    ProxyManager.DisableSystemProxy();
+                }
+                AppendLog("TUN", "Full-device tunnel active: all apps are routed through BeeVPN.");
+                UpdateUiState();
+                return;
+            }
+
+            _fullTunnelFallback = true;
+            AppendLog("WARN", "Full-device tunnel could not start. Falling back to Windows system proxy mode.");
+
+            if (_tunnelManager.HttpPort > 0)
+            {
+                ProxyManager.EnableSystemProxy("127.0.0.1", _tunnelManager.HttpPort);
+                AppendLog("PROXY", $"System proxy enabled on 127.0.0.1:{_tunnelManager.HttpPort} as a fallback.");
+            }
+
+            UpdateUiState();
+            _notifyIcon.ShowBalloonTip(
+                4000,
+                "Full Tunnel Unavailable",
+                "BeeVPN fell back to system proxy mode. Run BeeVPN as Administrator for full-device tunneling.",
+                Forms.ToolTipIcon.Warning
+            );
+        }
+
+        private void OnWintunFailed(string reason)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (_isIntentionalStop || !_isConnected) return;
+
+                AppendLog("TUN", $"ERROR: {reason}. Disconnecting so traffic is not left stranded.");
+                DisconnectVpn();
+                _notifyIcon.ShowBalloonTip(
+                    3000,
+                    "BeeVPN Tunnel Lost",
+                    "The full-device tunnel stopped. Network settings were restored.",
+                    Forms.ToolTipIcon.Error
+                );
             });
         }
 
@@ -439,7 +793,9 @@ namespace BeeVPN
             _notifyIcon.ShowBalloonTip(
                 3000,
                 "BeeVPN Connection Failed",
-                "Could not reach the Psiphon network. Try again or switch to Cloudflare DNS mode.",
+                _fullTunnel
+                    ? "Full-device mode uses TCP-only protocols, which some networks block. Try again or disable Full-device tunnel."
+                    : "Could not reach the Psiphon network. Try again or switch to Cloudflare DNS mode.",
                 Forms.ToolTipIcon.Warning
             );
         }
@@ -557,11 +913,14 @@ namespace BeeVPN
 
             AppendLog("UI", $"App routing updated: {(_isSplitTunnel ? "Split Tunnel (Specific apps only)" : "Full Tunnel (all apps that use the system proxy)")}");
 
-            if (_isConnected && _selectedMode == 0)
+            if (_isConnected && _selectedMode == 0 && !_fullTunnel)
             {
                 if (_isSplitTunnel)
                 {
-                    ProxyManager.DisableSystemProxy();
+                    if (ProxyManager.IsProxyActive)
+                    {
+                        ProxyManager.DisableSystemProxy();
+                    }
                     AppendLog("PROXY", "System proxy disabled. Specific apps only route through tunnel.");
                 }
                 else if (_tunnelManager.HttpPort > 0)
@@ -739,6 +1098,7 @@ namespace BeeVPN
         private void UpdateUiState()
         {
             comboMode.IsEnabled = !_isConnected && !_isConnecting;
+            UpdateOptionAvailability();
 
             if (_isConnected)
             {
@@ -750,8 +1110,12 @@ namespace BeeVPN
                 tvConnectionState.Text = _selectedMode == 0 ? "PSIPHON ACTIVE" : "CLOUDFLARE DNS ACTIVE";
                 tvConnectionState.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
 
-                tvHint.Text = _selectedMode == 0 
-                    ? (_isSplitTunnel ? "Split tunnel active: selected apps routed" : "Traffic is encrypted and securely routed")
+                bool fullTunnelActive = _selectedMode == 0 && _wintunTunnel.IsActive;
+
+                tvHint.Text = _selectedMode == 0
+                    ? (fullTunnelActive
+                        ? "All device traffic is encrypted and routed through the tunnel"
+                        : _isSplitTunnel ? "Split tunnel active: selected apps routed" : "Traffic is encrypted and securely routed")
                     : "DNS queries routed via 1.1.1.1 (general traffic direct)";
                 tvLatency.Text = _measuredLatency > 0 ? $"● {_measuredLatency} ms" : "○ Measuring";
                 tvLatency.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
@@ -759,9 +1123,12 @@ namespace BeeVPN
                 UpdatePowerButton(true, false);
 
                 // Update System Tray
-                _notifyIcon.Text = $"BeeVPN: {(_selectedMode == 0 ? "Connected (Psiphon)" : "DNS Active (1.1.1.1)")}";
+                string connectedLabel = _selectedMode == 0
+                    ? (fullTunnelActive ? "Connected (Full Tunnel)" : "Connected (Psiphon)")
+                    : "DNS Active (1.1.1.1)";
+                _notifyIcon.Text = $"BeeVPN: {connectedLabel}";
                 _menuItemToggleConnect.Text = "Disconnect";
-                _menuItemStatus.Text = $"Status: {(_selectedMode == 0 ? "Connected (Psiphon)" : "DNS Active (1.1.1.1)")}";
+                _menuItemStatus.Text = $"Status: {connectedLabel}";
             }
             else if (_isConnecting)
             {

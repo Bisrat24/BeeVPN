@@ -3,6 +3,6 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:padding="6dp"
-    android:textColor="@color/bee_gold"
+    android:textColor="@color/text_white"
     android:textSize="13sp"
     android:textStyle="bold" />

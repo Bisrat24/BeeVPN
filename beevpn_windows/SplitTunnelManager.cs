@@ -8,6 +8,9 @@ namespace BeeVPN
     public class AppSettings
     {
         public bool IsSplitTunnel { get; set; } = false;
+        public bool FullTunnel { get; set; } = false;
+        public string EgressRegion { get; set; } = "";
+        public bool FastProtocols { get; set; } = false;
     }
 
     public static class SplitTunnelManager
@@ -37,9 +40,14 @@ namespace BeeVPN
 
         public static void SaveSettings(bool isSplitTunnel)
         {
+            Settings.IsSplitTunnel = isSplitTunnel;
+            SaveSettings();
+        }
+
+        public static void SaveSettings()
+        {
             try
             {
-                Settings.IsSplitTunnel = isSplitTunnel;
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile)!);
                 File.WriteAllText(SettingsFile, JsonSerializer.Serialize(Settings, new JsonSerializerOptions { WriteIndented = true }));
             }

@@ -6,14 +6,14 @@ namespace BeeVPN
 {
     public partial class App : System.Windows.Application
     {
+        private const string MutexName = @"Local\BeeVPN_SingleInstance_Mutex";
         private static Mutex? _instanceMutex;
 
         protected override void OnStartup(System.Windows.StartupEventArgs e)
         {
-            const string mutexName = @"Local\BeeVPN_SingleInstance_Mutex";
             try
             {
-                _instanceMutex = new Mutex(true, mutexName, out bool isNewInstance);
+                _instanceMutex = new Mutex(true, MutexName, out bool isNewInstance);
                 if (!isNewInstance)
                 {
                     System.Windows.MessageBox.Show("BeeVPN is already running. Check your system tray in the taskbar.", "BeeVPN", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -54,10 +54,66 @@ namespace BeeVPN
             base.OnExit(e);
         }
 
+        /// <summary>
+        /// Drops the single-instance lock so an elevated replacement process can
+        /// start before this instance exits.
+        /// </summary>
+        public static void ReleaseInstanceMutex()
+        {
+            try
+            {
+                _instanceMutex?.ReleaseMutex();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Mutex release skipped: {ex.Message}");
+            }
+
+            try
+            {
+                _instanceMutex?.Dispose();
+            }
+            catch
+            {
+            }
+
+            _instanceMutex = null;
+        }
+
+        public static bool ReacquireInstanceMutex()
+        {
+            if (_instanceMutex != null) return true;
+
+            try
+            {
+                _instanceMutex = new Mutex(true, MutexName, out bool isNewInstance);
+                if (isNewInstance) return true;
+
+                _instanceMutex.Dispose();
+                _instanceMutex = null;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Mutex reacquire failed: {ex.Message}");
+                _instanceMutex = null;
+                return false;
+            }
+        }
+
         private static void CleanUp()
         {
-            ProxyManager.DisableSystemProxy();
+            if (ProxyManager.IsProxyActive)
+            {
+                ProxyManager.DisableSystemProxy();
+            }
+            else
+            {
+                ProxyManager.RestoreBackupIfAny();
+            }
+
             DnsManager.ResetDns();
+            WintunTunnelManager.CleanupStaleState();
         }
     }
 }

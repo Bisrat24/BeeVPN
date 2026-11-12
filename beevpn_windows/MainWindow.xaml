@@ -152,10 +152,43 @@
 
                     <!-- Mode Selector Dropdown -->
                     <Border Background="#181818" BorderBrush="#282828" BorderThickness="1" CornerRadius="8" Padding="3" Margin="0,0,0,10">
-                        <ComboBox x:Name="comboMode" Background="Transparent" Foreground="#FFFFFF" BorderThickness="0" FontSize="12" FontWeight="SemiBold" SelectionChanged="ComboMode_SelectionChanged">
+                        <ComboBox x:Name="comboMode" Background="#181818" Foreground="#FFFFFF" BorderBrush="#282828" BorderThickness="0" FontSize="12" FontWeight="SemiBold" SelectionChanged="ComboMode_SelectionChanged">
                             <ComboBoxItem Content="1. Psiphon Circumvention (Bypass)" IsSelected="True" Foreground="#FFFFFF" Background="#181818"/>
                             <ComboBoxItem Content="2. Cloudflare DNS (1.1.1.1 Fast)" Foreground="#FFFFFF" Background="#181818"/>
                         </ComboBox>
+                    </Border>
+
+                    <!-- Exit Region & Protocol Profile -->
+                    <Border Background="#181818" BorderBrush="#282828" BorderThickness="1" CornerRadius="8" Padding="8" Margin="0,0,0,10">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="8"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="EXIT REGION" Foreground="#666666" FontSize="9" FontWeight="Bold" Margin="0,0,0,3"/>
+                                    <ComboBox x:Name="comboRegion" Background="#222222" Foreground="#FFFFFF" BorderBrush="#333333" FontSize="11" SelectionChanged="ComboRegion_SelectionChanged"/>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Text="PROTOCOL PROFILE" Foreground="#666666" FontSize="9" FontWeight="Bold" Margin="0,0,0,3"/>
+                                    <ComboBox x:Name="comboProtocol" Background="#222222" Foreground="#FFFFFF" BorderBrush="#333333" FontSize="11" ToolTip="Fast uses OSSH/TLS-OSSH only and can fail on heavily filtered networks." SelectionChanged="ComboProtocol_SelectionChanged">
+                                        <ComboBoxItem Content="Fast (OSSH + TLS)" Foreground="#FFFFFF" Background="#222222"/>
+                                        <ComboBoxItem Content="Compatible (all)" Foreground="#FFFFFF" Background="#222222"/>
+                                    </ComboBox>
+                                </StackPanel>
+                            </Grid>
+
+                            <Border Background="#141414" BorderBrush="#262626" BorderThickness="1" CornerRadius="6" Padding="8,6" Margin="0,8,0,0">
+                                <StackPanel>
+                                    <CheckBox x:Name="chkFullTunnel" Content="Full-device tunnel (all apps, requires admin)" Foreground="#FFFFFF" FontSize="11" Checked="ChkFullTunnel_Changed" Unchecked="ChkFullTunnel_Changed"/>
+                                    <TextBlock x:Name="tvFullTunnelHint" Text="Routes every app through the encrypted tunnel via Wintun." Foreground="#666666" FontSize="9" TextWrapping="Wrap" Margin="20,3,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
                     </Border>
 
                     <!-- Central Power Button Section -->

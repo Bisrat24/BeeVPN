@@ -10,7 +10,7 @@
     <ApplicationIcon>app_icon.ico</ApplicationIcon>
     <AssemblyName>BeeVPN</AssemblyName>
     <RootNamespace>BeeVPN</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.4.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,7 +21,7 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Include="additional_parameters.txt">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <None Include="app_icon.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -31,6 +31,8 @@
     </None>
     <Resource Include="app_icon.png" />
     <Resource Include="app_icon.ico" />
+    <None Include="third_party\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

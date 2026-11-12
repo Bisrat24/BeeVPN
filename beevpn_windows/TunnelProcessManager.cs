@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,6 +21,7 @@ namespace BeeVPN
 
         public int SocksPort { get; private set; } = 0;
         public int HttpPort { get; private set; } = 0;
+        public int CorePid => _tunnelProcess?.Id ?? 0;
         public bool IsRunning => _tunnelProcess != null && !_tunnelProcess.HasExited;
         public bool IsTunnelActive { get; private set; } = false;
 
@@ -28,6 +30,7 @@ namespace BeeVPN
         public event Action<string, string>? TunnelConnected;
         public event Action<long, long>? BytesTransferred;
         public event Action? TunnelDisconnected;
+        public event Action<List<string>>? RegionsAvailable;
 
         public TunnelProcessManager()
         {
@@ -43,7 +46,7 @@ namespace BeeVPN
             Directory.CreateDirectory(_dataDir);
         }
 
-        public void Start()
+        public void Start(string egressRegion = "", bool fastProtocols = false, bool tcpOnly = false)
         {
             if (IsRunning) return;
 
@@ -53,7 +56,18 @@ namespace BeeVPN
                 return;
             }
 
-            EnsureConfigFile();
+            // Full-device capture drops all non-DNS UDP, which would sever a
+            // WebRTC/QUIC transport, so only TCP-based protocols are permitted.
+            // Server tactics can override LimitTunnelProtocols, so tactics are
+            // disabled for this mode; otherwise the core re-selects WebRTC.
+            if (fastProtocols || tcpOnly)
+            {
+                Log("CORE", tcpOnly
+                    ? "Full-device tunnel: using TCP-only protocols (OSSH, TLS-OSSH) with server tactics disabled."
+                    : "Fast profile: using OSSH/TLS-OSSH only with server tactics disabled.");
+            }
+
+            EnsureConfigFile(egressRegion, fastProtocols || tcpOnly, fastProtocols || tcpOnly);
 
             _cts = new CancellationTokenSource();
             SocksPort = 0;
@@ -209,7 +223,17 @@ namespace BeeVPN
                         break;
 
                     case "AvailableEgressRegions":
-                        Log("REGIONS", "Available exit regions updated.");
+                        var regions = new List<string>();
+                        if (data.TryGetProperty("regions", out var regionsEl) && regionsEl.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var regionEl in regionsEl.EnumerateArray())
+                            {
+                                string? region = regionEl.GetString();
+                                if (!string.IsNullOrEmpty(region)) regions.Add(region);
+                            }
+                        }
+                        Log("REGIONS", $"Available exit regions: {regions.Count}.");
+                        if (regions.Count > 0) RegionsAvailable?.Invoke(regions);
                         break;
 
                     case "Alert":
@@ -253,7 +277,50 @@ namespace BeeVPN
             LogMessage?.Invoke(tag, msg);
         }
 
-        private void EnsureConfigFile()
+        /// <summary>
+        /// Reads the regions present in the embedded server list, so the picker can be
+        /// populated before the first connection (live notices refine it later).
+        /// </summary>
+        public static List<string> GetEmbeddedRegions()
+        {
+            var regions = new SortedSet<string>(StringComparer.Ordinal);
+            try
+            {
+                string path = Path.Combine(AppContext.BaseDirectory, "servers.txt");
+                if (!File.Exists(path)) return new List<string>();
+
+                foreach (string line in File.ReadLines(path))
+                {
+                    string hex = line.Trim();
+                    if (hex.Length == 0) continue;
+
+                    try
+                    {
+                        string entry = Encoding.UTF8.GetString(Convert.FromHexString(hex));
+                        int jsonStart = entry.IndexOf('{');
+                        if (jsonStart < 0) continue;
+
+                        using var doc = JsonDocument.Parse(entry.Substring(jsonStart));
+                        if (doc.RootElement.TryGetProperty("region", out var regionEl))
+                        {
+                            string? region = regionEl.GetString();
+                            if (!string.IsNullOrEmpty(region)) regions.Add(region);
+                        }
+                    }
+                    catch
+                    {
+                        // Skip malformed entries
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to read embedded regions: {ex.Message}");
+            }
+            return new List<string>(regions);
+        }
+
+        private void EnsureConfigFile(string egressRegion, bool fastProtocols, bool disableTactics = false)
         {
             string baseDir = AppContext.BaseDirectory;
             string addParamsPath = Path.Combine(baseDir, "additional_parameters.txt");
@@ -266,7 +333,7 @@ namespace BeeVPN
                 ["SponsorId"] = "67DDC3614847FCEA",
                 ["DataRootDirectory"] = _dataDir,
                 ["TunnelWholeDevice"] = 0,
-                ["EgressRegion"] = "",
+                ["EgressRegion"] = string.IsNullOrWhiteSpace(egressRegion) ? "" : egressRegion.Trim().ToUpperInvariant(),
                 ["EmitDiagnosticNotices"] = true,
                 ["EmitDiagnosticNetworkParameters"] = true,
                 ["EmitBytesTransferred"] = true,
@@ -291,14 +358,43 @@ namespace BeeVPN
                 ["DNSResolverAlternateServers"] = new[] { "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4" }
             };
 
-            if (!string.IsNullOrWhiteSpace(additionalParams))
+            if (fastProtocols)
+            {
+                configObj["LimitTunnelProtocols"] = new[] { "OSSH", "TLS-OSSH" };
+            }
+
+            if (disableTactics)
+            {
+                configObj["DisableTactics"] = true;
+            }
+
+            if (!string.IsNullOrEmpty(additionalParams) && IsEncryptedParametersBlob(additionalParams))
             {
                 configObj["AdditionalParameters"] = additionalParams;
+            }
+            else if (!string.IsNullOrEmpty(additionalParams))
+            {
+                Debug.WriteLine("additional_parameters.txt is not a valid encrypted parameters blob; ignoring it.");
             }
 
             var options = new JsonSerializerOptions { WriteIndented = true };
             string json = JsonSerializer.Serialize(configObj, options);
             File.WriteAllText(_configPath, json);
+        }
+
+        // The core treats this field as base64 (32-byte key + NaCl secretbox ciphertext
+        // of a Config overlay), not JSON. Injecting anything else makes Config.Commit()
+        // fail and the core exits before connecting.
+        private static bool IsEncryptedParametersBlob(string value)
+        {
+            try
+            {
+                return Convert.FromBase64String(value.Trim()).Length >= 32;
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
         }
     }
 }

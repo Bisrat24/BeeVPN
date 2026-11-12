@@ -33,6 +33,8 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -40,6 +42,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.TreeSet;
+
+import org.json.JSONObject;
 
 public class MainActivity extends Activity {
 
@@ -48,6 +53,9 @@ public class MainActivity extends Activity {
     private static final String KEY_MODE = "selected_mode";
     private static final String KEY_TUNNEL_ALL = "tunnel_all_apps";
     private static final String KEY_SELECTED_PACKAGES = "selected_packages";
+    private static final String KEY_REGION = "egress_region";
+    private static final String KEY_FAST_PROTOCOLS = "fast_protocols";
+    private static final String REGION_AUTO = "Auto (Fastest)";
 
     private TextView mTvStatusBadge;
     private TextView mTvConnectionState;
@@ -60,6 +68,10 @@ public class MainActivity extends Activity {
     private TextView mTvServerTitle;
     private TextView mTvServerSub;
     private Spinner mSpinnerMode;
+    private Spinner mSpinnerRegion;
+    private Spinner mSpinnerProtocol;
+    private ArrayAdapter<String> mRegionAdapter;
+    private String mSelectedRegion = "";
 
     private View mCardAppRouting;
     private TextView mTvAppRoutingSub;
@@ -156,6 +168,7 @@ public class MainActivity extends Activity {
         mSelectedMode = prefs.getInt(KEY_MODE, BeeVpnService.MODE_PSIPHON);
 
         setupModeSpinner();
+        setupConnectionOptions();
 
         mBtnToggleVpn.setOnClickListener(v -> toggleVpn());
 
@@ -218,6 +231,7 @@ public class MainActivity extends Activity {
                         .putInt(KEY_MODE, mSelectedMode)
                         .apply();
                 updateServerCardText(mSelectedMode);
+                updateOptionAvailability();
                 LogManager.log("UI", "Selected mode: " + (position == 0 ? "Psiphon Circumvention" : "Cloudflare DNS"));
             }
 
@@ -226,10 +240,163 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void setupConnectionOptions() {
+        mSpinnerRegion = findViewById(R.id.spinner_region);
+        mSpinnerProtocol = findViewById(R.id.spinner_protocol);
+        if (mSpinnerRegion == null || mSpinnerProtocol == null) return;
+
+        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+        mSelectedRegion = prefs.getString(KEY_REGION, "");
+        boolean fast = prefs.getBoolean(KEY_FAST_PROTOCOLS, false);
+
+        String[] profiles = new String[]{
+                "Compatible (all protocols)",
+                "Fast (OSSH + TLS)"
+        };
+        ArrayAdapter<String> profileAdapter = new ArrayAdapter<String>(this, R.layout.spinner_item, profiles);
+        profileAdapter.setDropDownViewResource(R.layout.spinner_dropdown_item);
+        mSpinnerProtocol.setAdapter(profileAdapter);
+        mSpinnerProtocol.setSelection(fast ? 1 : 0, false);
+        mSpinnerProtocol.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                boolean fastProfile = position == 1;
+                getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(KEY_FAST_PROTOCOLS, fastProfile)
+                        .apply();
+                LogManager.log("UI", fastProfile
+                        ? "Protocol profile: Fast (OSSH + TLS-OSSH)"
+                        : "Protocol profile: Compatible (all protocols)");
+                if (fastProfile) {
+                    Toast.makeText(MainActivity.this, "Fast mode can fail on heavily filtered networks",
+                            Toast.LENGTH_LONG).show();
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+
+        List<String> regionItems = new ArrayList<>();
+        regionItems.add(REGION_AUTO);
+        mRegionAdapter = new ArrayAdapter<String>(this, R.layout.spinner_item, regionItems);
+        mRegionAdapter.setDropDownViewResource(R.layout.spinner_dropdown_item);
+        mSpinnerRegion.setAdapter(mRegionAdapter);
+        selectSavedRegion();
+        mSpinnerRegion.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                String region = position == 0 ? "" : String.valueOf(parent.getItemAtPosition(position));
+                mSelectedRegion = region;
+                getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                        .edit()
+                        .putString(KEY_REGION, region)
+                        .apply();
+                updateServerCardText(mSelectedMode);
+                LogManager.log("UI", region.isEmpty()
+                        ? "Exit region: Auto (fastest available)"
+                        : "Exit region: " + region);
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {}
+        });
+
+        updateOptionAvailability();
+
+        new Thread(() -> {
+            List<String> regions = loadEmbeddedRegions();
+            runOnUiThread(() -> {
+                if (mRegionAdapter == null) return;
+                for (String region : regions) {
+                    mRegionAdapter.add(region);
+                }
+                mRegionAdapter.notifyDataSetChanged();
+                selectSavedRegion();
+            });
+        }, "BeeVpn-Regions").start();
+    }
+
+    private void selectSavedRegion() {
+        if (mSpinnerRegion == null || mRegionAdapter == null) return;
+
+        int index = 0;
+        if (mSelectedRegion != null && !mSelectedRegion.isEmpty()) {
+            for (int i = 0; i < mRegionAdapter.getCount(); i++) {
+                if (mSelectedRegion.equals(mRegionAdapter.getItem(i))) {
+                    index = i;
+                    break;
+                }
+            }
+        }
+        mSpinnerRegion.setSelection(index, false);
+    }
+
+    private void updateOptionAvailability() {
+        boolean enabled = mSelectedMode == BeeVpnService.MODE_PSIPHON
+                && !BeeVpnService.isRunning()
+                && !BeeVpnService.isConnecting();
+        if (mSpinnerRegion != null) mSpinnerRegion.setEnabled(enabled);
+        if (mSpinnerProtocol != null) mSpinnerProtocol.setEnabled(enabled);
+    }
+
+    private List<String> loadEmbeddedRegions() {
+        TreeSet<String> regions = new TreeSet<>();
+        BufferedReader reader = null;
+        try {
+            reader = new BufferedReader(new InputStreamReader(getResources().openRawResource(R.raw.servers), "UTF-8"));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                try {
+                    String entry = new String(hexToBytes(line), "UTF-8");
+                    int jsonStart = entry.indexOf('{');
+                    if (jsonStart < 0) continue;
+                    JSONObject server = new JSONObject(entry.substring(jsonStart));
+                    String region = server.optString("region", "");
+                    if (!region.isEmpty()) regions.add(region);
+                } catch (Exception ignored) {
+                    // Skip malformed server entries
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.w("BeeVPN", "Failed to load embedded regions: " + e.getMessage());
+        } finally {
+            try {
+                if (reader != null) reader.close();
+            } catch (Exception ignored) {}
+        }
+        return new ArrayList<>(regions);
+    }
+
+    private static byte[] hexToBytes(String hex) {
+        if ((hex.length() & 1) != 0) throw new IllegalArgumentException("Odd hex length");
+        byte[] out = new byte[hex.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            int hi = Character.digit(hex.charAt(i * 2), 16);
+            int lo = Character.digit(hex.charAt(i * 2 + 1), 16);
+            if (hi < 0 || lo < 0) throw new IllegalArgumentException("Invalid hex");
+            out[i] = (byte) ((hi << 4) | lo);
+        }
+        return out;
+    }
+
     private void updateServerCardText(int mode) {
         if (mode == BeeVpnService.MODE_PSIPHON) {
-            if (mTvServerTitle != null) mTvServerTitle.setText("Psiphon Fleet (Auto)");
-            if (mTvServerSub != null) mTvServerSub.setText("Global obfuscated circumvention network");
+            if (mTvServerTitle != null) {
+                if (mSelectedRegion == null || mSelectedRegion.isEmpty()) {
+                    mTvServerTitle.setText("Psiphon Fleet (Auto)");
+                } else {
+                    mTvServerTitle.setText("Psiphon Fleet (" + mSelectedRegion + ")");
+                }
+            }
+            if (mTvServerSub != null) {
+                mTvServerSub.setText(mSelectedRegion == null || mSelectedRegion.isEmpty()
+                        ? "Global obfuscated circumvention network"
+                        : "Exit region pinned to " + mSelectedRegion);
+            }
             if (mCardAppRouting != null) mCardAppRouting.setVisibility(View.VISIBLE);
         } else {
             if (mTvServerTitle != null) mTvServerTitle.setText("Cloudflare DNS (1.1.1.1)");
@@ -498,6 +665,10 @@ public class MainActivity extends Activity {
     }
 
     private void updateUiState(boolean isConnected, boolean isConnecting, String statusMsg, long durationSec, long rxBytes, long txBytes, int latency) {
+        boolean optionsEnabled = !isConnected && !isConnecting && mSelectedMode == BeeVpnService.MODE_PSIPHON;
+        if (mSpinnerRegion != null) mSpinnerRegion.setEnabled(optionsEnabled);
+        if (mSpinnerProtocol != null) mSpinnerProtocol.setEnabled(optionsEnabled);
+
         if (isConnected) {
             mBtnToggleVpn.setText(R.string.disconnect);
             mBtnToggleVpn.setBackgroundResource(R.drawable.btn_disconnect_bg);
