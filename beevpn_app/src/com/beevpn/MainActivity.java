@@ -74,6 +74,8 @@ public class MainActivity extends Activity {
     private TextView mTvDuration;
     private TextView mTvDownload;
     private TextView mTvUpload;
+    private TextView mTvDownloadSpeed;
+    private TextView mTvUploadSpeed;
     private TextView mTvLatency;
     private TextView mTvServerTitle;
     private TextView mTvServerSub;
@@ -90,6 +92,8 @@ public class MainActivity extends Activity {
     private ScrollView mScrollLogs;
     private Button mBtnCopyLogs;
     private Button mBtnClearLogs;
+    private Button mBtnToggleLogs;
+    private android.animation.ObjectAnimator mPulseAnimator;
 
     private int mSelectedMode = BeeVpnService.MODE_PSIPHON;
     // Mode the service actually runs. Differs from mSelectedMode when Psiphon
@@ -112,9 +116,11 @@ public class MainActivity extends Activity {
                     long durationSec = intent.getLongExtra(BeeVpnService.EXTRA_DURATION, 0);
                     long rxBytes = intent.getLongExtra(BeeVpnService.EXTRA_RX_BYTES, 0);
                     long txBytes = intent.getLongExtra(BeeVpnService.EXTRA_TX_BYTES, 0);
+                    long rxSpeed = intent.getLongExtra(BeeVpnService.EXTRA_RX_SPEED, 0);
+                    long txSpeed = intent.getLongExtra(BeeVpnService.EXTRA_TX_SPEED, 0);
                     int latency = intent.getIntExtra(BeeVpnService.EXTRA_LATENCY, -1);
                     mActiveMode = intent.getIntExtra(BeeVpnService.EXTRA_ACTIVE_MODE, mSelectedMode);
-                    updateUiState(isConnected, isConnecting, statusMsg, durationSec, rxBytes, txBytes, latency);
+                    updateUiState(isConnected, isConnecting, statusMsg, durationSec, rxBytes, txBytes, rxSpeed, txSpeed, latency);
                 } else if (LogManager.ACTION_NEW_LOG.equals(intent.getAction())) {
                     String line = intent.getStringExtra(LogManager.EXTRA_LOG_LINE);
                     if (line != null && mTvLogs != null) {
@@ -139,6 +145,8 @@ public class MainActivity extends Activity {
         mTvDuration = findViewById(R.id.tv_duration);
         mTvDownload = findViewById(R.id.tv_download);
         mTvUpload = findViewById(R.id.tv_upload);
+        mTvDownloadSpeed = findViewById(R.id.tv_download_speed);
+        mTvUploadSpeed = findViewById(R.id.tv_upload_speed);
         mTvLatency = findViewById(R.id.tv_latency);
         mTvServerTitle = findViewById(R.id.tv_server_title);
         mTvServerSub = findViewById(R.id.tv_server_sub);
@@ -151,6 +159,21 @@ public class MainActivity extends Activity {
         mScrollLogs = findViewById(R.id.scroll_logs);
         mBtnCopyLogs = findViewById(R.id.btn_copy_logs);
         mBtnClearLogs = findViewById(R.id.btn_clear_logs);
+        mBtnToggleLogs = findViewById(R.id.btn_toggle_logs);
+        if (mBtnToggleLogs != null) {
+            mBtnToggleLogs.setOnClickListener(v -> {
+                if (mScrollLogs != null) {
+                    if (mScrollLogs.getVisibility() == View.VISIBLE) {
+                        mScrollLogs.setVisibility(View.GONE);
+                        mBtnToggleLogs.setText("SHOW");
+                    } else {
+                        mScrollLogs.setVisibility(View.VISIBLE);
+                        mBtnToggleLogs.setText("HIDE");
+                        scrollToBottom();
+                    }
+                }
+            });
+        }
 
         SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
         mSelectedMode = prefs.getInt(KEY_MODE, BeeVpnService.MODE_PSIPHON);
@@ -187,7 +210,7 @@ public class MainActivity extends Activity {
         loadInstalledAppsAsync(null);
         updateAppRoutingSubtitle();
         syncActiveMode();
-        updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0, -1);
+        updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0, 0, 0, -1);
     }
 
     private void syncActiveMode() {
@@ -242,7 +265,7 @@ public class MainActivity extends Activity {
 
         SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
         mSelectedRegion = prefs.getString(KEY_REGION, "");
-        boolean fast = prefs.getBoolean(KEY_FAST_PROTOCOLS, false);
+        boolean fast = prefs.getBoolean(KEY_FAST_PROTOCOLS, true);
 
         String[] profiles = new String[]{
                 "Compatible (all protocols)",
@@ -814,7 +837,7 @@ public class MainActivity extends Activity {
 
         updateAppRoutingSubtitle();
         syncActiveMode();
-        updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0, -1);
+        updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0, 0, 0, -1);
     }
 
     @Override
@@ -863,11 +886,12 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void updateUiState(boolean isConnected, boolean isConnecting, String statusMsg, long durationSec, long rxBytes, long txBytes, int latency) {
+    private void updateUiState(boolean isConnected, boolean isConnecting, String statusMsg, long durationSec, long rxBytes, long txBytes, long rxSpeed, long txSpeed, int latency) {
         boolean optionsEnabled = !isConnected && !isConnecting && mSelectedMode == BeeVpnService.MODE_PSIPHON;
         setOptionControlsEnabled(optionsEnabled);
 
         if (isConnected) {
+            stopConnectPulse();
             mBtnToggleVpn.setText(R.string.disconnect);
             mBtnToggleVpn.setBackgroundResource(R.drawable.btn_disconnect_bg);
 
@@ -892,17 +916,33 @@ public class MainActivity extends Activity {
 
             mTvDownload.setText(BeeVpnService.formatBytes(rxBytes));
             mTvUpload.setText(BeeVpnService.formatBytes(txBytes));
+            if (mTvDownloadSpeed != null) {
+                mTvDownloadSpeed.setText("↓ " + BeeVpnService.formatSpeed(rxSpeed));
+            }
+            if (mTvUploadSpeed != null) {
+                mTvUploadSpeed.setText("↑ " + BeeVpnService.formatSpeed(txSpeed));
+            }
 
             if (latency > 0) {
-                mTvLatency.setText("● " + latency + " ms");
+                if (latency < 90) {
+                    mTvLatency.setText("● " + latency + " ms (Fast)");
+                    mTvLatency.setTextColor(resolveColor(R.color.status_connected));
+                } else if (latency < 190) {
+                    mTvLatency.setText("● " + latency + " ms (Good)");
+                    mTvLatency.setTextColor(resolveColor(R.color.bee_gold));
+                } else {
+                    mTvLatency.setText("● " + latency + " ms (Slow)");
+                    mTvLatency.setTextColor(resolveColor(R.color.status_disconnected));
+                }
             } else {
                 mTvLatency.setText("○ Measuring");
+                mTvLatency.setTextColor(resolveColor(R.color.text_dim));
             }
-            mTvLatency.setTextColor(resolveColor(R.color.status_connected));
 
             mSpinnerMode.setEnabled(false);
             mSpinnerMode.setAlpha(0.45f);
         } else if (isConnecting) {
+            startConnectPulse();
             mBtnToggleVpn.setText("CANCEL");
             mBtnToggleVpn.setBackgroundResource(R.drawable.btn_connect_bg);
 
@@ -918,12 +958,16 @@ public class MainActivity extends Activity {
             mTvDuration.setText("00:00:00");
             mTvDownload.setText("0.0 MB");
             mTvUpload.setText("0.0 MB");
+            if (mTvDownloadSpeed != null) mTvDownloadSpeed.setText("↓ 0.0 KB/s");
+            if (mTvUploadSpeed != null) mTvUploadSpeed.setText("↑ 0.0 KB/s");
+
             mTvLatency.setText("○ Probing");
             mTvLatency.setTextColor(resolveColor(R.color.bee_gold));
 
             mSpinnerMode.setEnabled(false);
             mSpinnerMode.setAlpha(0.45f);
         } else {
+            stopConnectPulse();
             mActiveMode = mSelectedMode;
             mBtnToggleVpn.setText(R.string.connect);
             mBtnToggleVpn.setBackgroundResource(R.drawable.btn_connect_bg);
@@ -940,11 +984,43 @@ public class MainActivity extends Activity {
             mTvDuration.setText("00:00:00");
             mTvDownload.setText("0.0 MB");
             mTvUpload.setText("0.0 MB");
+            if (mTvDownloadSpeed != null) mTvDownloadSpeed.setText("↓ 0.0 KB/s");
+            if (mTvUploadSpeed != null) mTvUploadSpeed.setText("↑ 0.0 KB/s");
+
             mTvLatency.setText("○ Idle");
             mTvLatency.setTextColor(resolveColor(R.color.text_dim));
 
             mSpinnerMode.setEnabled(true);
             mSpinnerMode.setAlpha(1f);
+        }
+    }
+
+    private void startConnectPulse() {
+        if (mBtnToggleVpn == null) return;
+        if (mPulseAnimator == null) {
+            mPulseAnimator = android.animation.ObjectAnimator.ofFloat(mBtnToggleVpn, "scaleX", 1.0f, 1.06f, 1.0f);
+            mPulseAnimator.setDuration(1100);
+            mPulseAnimator.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            mPulseAnimator.setRepeatMode(android.animation.ValueAnimator.RESTART);
+            mPulseAnimator.addUpdateListener(anim -> {
+                if (mBtnToggleVpn != null) {
+                    float val = (Float) anim.getAnimatedValue();
+                    mBtnToggleVpn.setScaleY(val);
+                }
+            });
+        }
+        if (!mPulseAnimator.isRunning()) {
+            mPulseAnimator.start();
+        }
+    }
+
+    private void stopConnectPulse() {
+        if (mPulseAnimator != null && mPulseAnimator.isRunning()) {
+            mPulseAnimator.cancel();
+        }
+        if (mBtnToggleVpn != null) {
+            mBtnToggleVpn.setScaleX(1.0f);
+            mBtnToggleVpn.setScaleY(1.0f);
         }
     }
 

@@ -41,8 +41,13 @@ namespace BeeVPN
         private readonly Forms.ContextMenuStrip _trayMenu;
         private readonly Forms.ToolStripMenuItem _menuItemOpen;
         private readonly Forms.ToolStripMenuItem _menuItemToggleConnect;
+        private readonly Forms.ToolStripMenuItem _menuItemFastProfile;
         private readonly Forms.ToolStripMenuItem _menuItemStatus;
         private readonly Forms.ToolStripMenuItem _menuItemExit;
+
+        private long _lastTickerRx = 0;
+        private long _lastTickerTx = 0;
+        private DateTime _lastTickerTime = DateTime.MinValue;
 
         public MainWindow()
         {
@@ -89,12 +94,21 @@ namespace BeeVPN
 
             _menuItemStatus = new Forms.ToolStripMenuItem("Status: Disconnected") { Enabled = false };
 
+            _menuItemFastProfile = new Forms.ToolStripMenuItem("⚡ Fast Protocols (OSSH+TLS)") { Checked = SplitTunnelManager.Settings.FastProtocols };
+            _menuItemFastProfile.Click += (s, e) => Dispatcher.Invoke(() =>
+            {
+                bool next = !_menuItemFastProfile.Checked;
+                _menuItemFastProfile.Checked = next;
+                comboProtocol.SelectedIndex = next ? 0 : 1;
+            });
+
             _menuItemExit = new Forms.ToolStripMenuItem("Exit");
             _menuItemExit.Click += (s, e) => Dispatcher.Invoke(ExitApplication);
 
             _trayMenu.Items.Add(_menuItemOpen);
             _trayMenu.Items.Add(new Forms.ToolStripSeparator());
             _trayMenu.Items.Add(_menuItemToggleConnect);
+            _trayMenu.Items.Add(_menuItemFastProfile);
             _trayMenu.Items.Add(_menuItemStatus);
             _trayMenu.Items.Add(new Forms.ToolStripSeparator());
             _trayMenu.Items.Add(_menuItemExit);
@@ -797,6 +811,29 @@ namespace BeeVPN
             });
         }
 
+        private static string FormatSpeed(long bytesPerSec)
+        {
+            if (bytesPerSec <= 0) return "0.0 KB/s";
+            if (bytesPerSec < 1024 * 1024)
+                return $"{bytesPerSec / 1024.0:F1} KB/s";
+            return $"{bytesPerSec / (1024.0 * 1024.0):F1} MB/s";
+        }
+
+        private void BtnToggleLogs_Click(object sender, RoutedEventArgs e)
+        {
+            if (borderTerminal.Visibility == Visibility.Visible)
+            {
+                borderTerminal.Visibility = Visibility.Collapsed;
+                btnToggleLogs.Content = "Show";
+            }
+            else
+            {
+                borderTerminal.Visibility = Visibility.Visible;
+                btnToggleLogs.Content = "Hide";
+                txtLogs.ScrollToEnd();
+            }
+        }
+
         private void StatsTimer_Tick(object? sender, EventArgs e)
         {
             if (_connectTime != DateTime.MinValue)
@@ -810,9 +847,31 @@ namespace BeeVPN
                 var (rx, tx) = _wintunTunnel.GetTotalBytes();
                 if (rx > _rxBytes) _rxBytes = rx;
                 if (tx > _txBytes) _txBytes = tx;
-                tvDownload.Text = FormatTraffic(_rxBytes);
-                tvUpload.Text = FormatTraffic(_txBytes);
             }
+
+            tvDownload.Text = FormatTraffic(_rxBytes);
+            tvUpload.Text = FormatTraffic(_txBytes);
+
+            double deltaSec = _lastTickerTime > DateTime.MinValue ? (DateTime.Now - _lastTickerTime).TotalSeconds : 1.0;
+            if (deltaSec > 0.4 && _isConnected)
+            {
+                long rxDelta = _rxBytes - _lastTickerRx;
+                long txDelta = _txBytes - _lastTickerTx;
+                if (rxDelta < 0) rxDelta = 0;
+                if (txDelta < 0) txDelta = 0;
+                long rxSpeed = (long)(rxDelta / deltaSec);
+                long txSpeed = (long)(txDelta / deltaSec);
+                tvDownloadSpeed.Text = $"↓ {FormatSpeed(rxSpeed)}";
+                tvUploadSpeed.Text = $"↑ {FormatSpeed(txSpeed)}";
+            }
+            else if (!_isConnected)
+            {
+                tvDownloadSpeed.Text = "↓ 0.0 KB/s";
+                tvUploadSpeed.Text = "↑ 0.0 KB/s";
+            }
+            _lastTickerRx = _rxBytes;
+            _lastTickerTx = _txBytes;
+            _lastTickerTime = DateTime.Now;
 
             if (_isConnected)
             {
@@ -837,7 +896,29 @@ namespace BeeVPN
                         _measuredLatency = ms;
                         if (_isConnected)
                         {
-                            tvLatency.Text = ms > 0 ? $"● {ms} ms" : "○ Measuring";
+                            if (ms > 0)
+                            {
+                                if (ms < 90)
+                                {
+                                    tvLatency.Text = $"● {ms} ms (Fast)";
+                                    tvLatency.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
+                                }
+                                else if (ms < 190)
+                                {
+                                    tvLatency.Text = $"● {ms} ms (Good)";
+                                    tvLatency.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0xB8, 0x00));
+                                }
+                                else
+                                {
+                                    tvLatency.Text = $"● {ms} ms (Slow)";
+                                    tvLatency.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0x52, 0x52));
+                                }
+                            }
+                            else
+                            {
+                                tvLatency.Text = "○ Measuring";
+                                tvLatency.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x88, 0x88, 0x88));
+                            }
                         }
                     });
                 });

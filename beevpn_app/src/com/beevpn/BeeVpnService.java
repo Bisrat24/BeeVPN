@@ -63,6 +63,8 @@ public class BeeVpnService extends VpnService {
     public static final String EXTRA_DURATION = "extra_duration";
     public static final String EXTRA_RX_BYTES = "extra_rx_bytes";
     public static final String EXTRA_TX_BYTES = "extra_tx_bytes";
+    public static final String EXTRA_RX_SPEED = "extra_rx_speed";
+    public static final String EXTRA_TX_SPEED = "extra_tx_speed";
     public static final String EXTRA_LATENCY = "extra_latency";
     public static final String EXTRA_ACTIVE_MODE = "extra_active_mode";
 
@@ -112,11 +114,26 @@ public class BeeVpnService extends VpnService {
     private long mStartTime = 0;
     private final java.util.concurrent.atomic.AtomicLong mRxBytes = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong mTxBytes = new java.util.concurrent.atomic.AtomicLong(0);
+    private long mLastTickerRx = 0;
+    private long mLastTickerTx = 0;
+    private long mLastTickerTime = 0;
+    private volatile long mRxSpeedBps = 0;
+    private volatile long mTxSpeedBps = 0;
     private long mUidRxBaseline = -1;
     private long mUidTxBaseline = -1;
     private volatile int mMeasuredLatencyMs = -1;
     private long mLastLatencyCheck = 0;
     private String mLastStatusMsg = "Ready";
+
+    private static class DnsCacheEntry {
+        final byte[] response;
+        final long expiresAt;
+        DnsCacheEntry(byte[] response, long expiresAt) {
+            this.response = response;
+            this.expiresAt = expiresAt;
+        }
+    }
+    private final ConcurrentHashMap<String, DnsCacheEntry> mDnsCache = new ConcurrentHashMap<>();
 
     private Handler mHandler;
 
@@ -359,7 +376,19 @@ public class BeeVpnService extends VpnService {
     }
 
     private byte[] resolveDnsQuery(byte[] query) {
+        if (query.length >= 16) {
+            String cacheKey = android.util.Base64.encodeToString(query, 12, query.length - 12, android.util.Base64.NO_WRAP);
+            DnsCacheEntry cached = mDnsCache.get(cacheKey);
+            if (cached != null && SystemClock.elapsedRealtime() < cached.expiresAt) {
+                byte[] hit = cached.response.clone();
+                hit[0] = query[0];
+                hit[1] = query[1];
+                return hit;
+            }
+        }
+
         long now = SystemClock.elapsedRealtime();
+        byte[] response = null;
         if (now >= mDotRetryAfterMs) {
             DnsOverTls resolver = mDotResolvers.get();
             if (resolver == null) {
@@ -368,21 +397,30 @@ public class BeeVpnService extends VpnService {
                 mOpenDotResolvers.add(resolver);
             }
 
-            byte[] response = resolver.resolve(query);
+            response = resolver.resolve(query);
             if (response != null) {
                 if (!mDotHealthy) {
                     mDotHealthy = true;
                     LogManager.log("DNS", "DNS-over-TLS established with " + DOT_HOST + " (" + DOT_SERVER + ":" + DOT_PORT + ").");
                 }
                 mDotRetryAfterMs = 0;
-                return response;
+            } else {
+                mDotHealthy = false;
+                mDotRetryAfterMs = now + DOT_RETRY_INTERVAL_MS;
+                LogManager.log("DNS", "DNS-over-TLS unavailable; using UDP/53 for the next 60s.");
             }
-
-            mDotHealthy = false;
-            mDotRetryAfterMs = now + DOT_RETRY_INTERVAL_MS;
-            LogManager.log("DNS", "DNS-over-TLS unavailable; using UDP/53 for the next 60s.");
         }
-        return resolveUdp(query);
+
+        if (response == null) {
+            response = resolveUdp(query);
+        }
+
+        if (response != null && response.length > 12 && (response[3] & 0x0F) == 0 && query.length >= 16) {
+            String cacheKey = android.util.Base64.encodeToString(query, 12, query.length - 12, android.util.Base64.NO_WRAP);
+            mDnsCache.put(cacheKey, new DnsCacheEntry(response, SystemClock.elapsedRealtime() + 180000));
+        }
+
+        return response;
     }
 
     private byte[] resolveUdp(byte[] query) {
@@ -620,7 +658,7 @@ public class BeeVpnService extends VpnService {
             LogManager.log("CORE", startRegion == null || startRegion.isEmpty()
                     ? "Exit region: Auto (fastest available)"
                     : "Exit region: " + startRegion);
-            if (startPrefs.getBoolean(PREF_FAST_PROTOCOLS, false)) {
+            if (startPrefs.getBoolean(PREF_FAST_PROTOCOLS, true)) {
                 LogManager.log("CORE", "Protocol profile: Fast (OSSH + TLS-OSSH, server tactics disabled)");
             }
             updateNotification("BeeVPN Connecting", "Connecting to Psiphon network...");
@@ -653,10 +691,12 @@ public class BeeVpnService extends VpnService {
                         config.put("SponsorId", "67DDC3614847FCEA");
                         config.put("DataRootDirectory", getFilesDir().getAbsolutePath());
                         config.put("TunnelWholeDevice", 1);
+                        config.put("TunnelPoolSize", 2);
+                        config.put("EstablishTunnelTimeoutSeconds", 20);
                         SharedPreferences connPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
                         String egressRegion = connPrefs.getString(PREF_EGRESS_REGION, "");
                         config.put("EgressRegion", egressRegion == null ? "" : egressRegion);
-                        if (connPrefs.getBoolean(PREF_FAST_PROTOCOLS, false)) {
+                        if (connPrefs.getBoolean(PREF_FAST_PROTOCOLS, true)) {
                             config.put("LimitTunnelProtocols", new JSONArray().put("OSSH").put("TLS-OSSH"));
                             // Tactics can re-enable WebRTC inproxies and override the limit above.
                             config.put("DisableTactics", true);
@@ -1032,15 +1072,40 @@ public class BeeVpnService extends VpnService {
                     }
                 }
 
+                long now = SystemClock.elapsedRealtime();
+                long dt = (mLastTickerTime > 0) ? (now - mLastTickerTime) : 1000;
+                if (dt <= 0) dt = 1000;
+                long curRx = mRxBytes.get();
+                long curTx = mTxBytes.get();
+                if (mLastTickerTime > 0 && sIsRunning) {
+                    long rxDiff = curRx - mLastTickerRx;
+                    long txDiff = curTx - mLastTickerTx;
+                    mRxSpeedBps = (Math.max(0, rxDiff) * 1000) / dt;
+                    mTxSpeedBps = (Math.max(0, txDiff) * 1000) / dt;
+                } else if (!sIsRunning) {
+                    mRxSpeedBps = 0;
+                    mTxSpeedBps = 0;
+                }
+                mLastTickerRx = curRx;
+                mLastTickerTx = curTx;
+                mLastTickerTime = now;
+
                 broadcastStatus(sIsRunning, sIsConnecting, mLastStatusMsg);
                 if (sIsRunning) {
                     String prefix = sCurrentMode == MODE_PSIPHON ? "Protected" : "DNS Active";
-                    String stats = prefix + " • ↓ " + formatBytes(mRxBytes.get()) + "  ↑ " + formatBytes(mTxBytes.get());
+                    String stats = prefix + " • ↓ " + formatBytes(mRxBytes.get()) + " (" + formatSpeed(mRxSpeedBps) + ")";
                     updateNotification("BeeVPN Connected", stats);
                 }
                 mHandler.postDelayed(this, 1000);
             }
         }, 1000);
+    }
+
+    public static String formatSpeed(long bytesPerSec) {
+        if (bytesPerSec <= 0) return "0.0 KB/s";
+        if (bytesPerSec < 1024 * 1024)
+            return String.format(java.util.Locale.US, "%.1f KB/s", bytesPerSec / 1024.0);
+        return String.format(java.util.Locale.US, "%.1f MB/s", bytesPerSec / (1024.0 * 1024.0));
     }
 
     private static int probeDirectLatency() {
@@ -1218,6 +1283,8 @@ public class BeeVpnService extends VpnService {
         intent.putExtra(EXTRA_DURATION, durationSec);
         intent.putExtra(EXTRA_RX_BYTES, mRxBytes.get());
         intent.putExtra(EXTRA_TX_BYTES, mTxBytes.get());
+        intent.putExtra(EXTRA_RX_SPEED, mRxSpeedBps);
+        intent.putExtra(EXTRA_TX_SPEED, mTxSpeedBps);
         intent.putExtra(EXTRA_LATENCY, mMeasuredLatencyMs);
         intent.putExtra(EXTRA_ACTIVE_MODE, sCurrentMode);
         sendBroadcast(intent);

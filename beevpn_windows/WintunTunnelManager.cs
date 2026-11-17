@@ -341,7 +341,7 @@ namespace BeeVPN
             var psi = new ProcessStartInfo
             {
                 FileName = _tun2socksPath,
-                Arguments = $"--device \"tun://{AdapterName}\" --proxy \"socks5://127.0.0.1:{_bridge!.Port}\" --mtu {TunMtu} --loglevel error",
+                Arguments = $"--device \"tun://{AdapterName}\" --proxy \"socks5://127.0.0.1:{_bridge!.Port}\" --mtu {TunMtu} --tcp-mss-clamp 1360 --loglevel error",
                 WorkingDirectory = _tun2socksDir,
                 UseShellExecute = false,
                 CreateNoWindow = true,

@@ -10,7 +10,7 @@ namespace BeeVPN
         public bool IsSplitTunnel { get; set; } = false;
         public bool FullTunnel { get; set; } = false;
         public string EgressRegion { get; set; } = "";
-        public bool FastProtocols { get; set; } = false;
+        public bool FastProtocols { get; set; } = true;
     }
 
     public static class SplitTunnelManager

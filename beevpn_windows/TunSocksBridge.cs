@@ -26,6 +26,7 @@ namespace BeeVPN
 
         private readonly int _upstreamSocksPort;
         private readonly SemaphoreSlim _dnsConcurrency = new(128, 128);
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DnsCacheEntry> _dnsCache = new();
 
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
@@ -293,6 +294,31 @@ namespace BeeVPN
             byte[] query = new byte[datagram.Length - payloadOffset];
             Buffer.BlockCopy(datagram, payloadOffset, query, 0, query.Length);
 
+            // Sub-millisecond in-memory DNS caching
+            if (query.Length >= 16)
+            {
+                string cacheKey = Convert.ToBase64String(query, 12, query.Length - 12);
+                if (_dnsCache.TryGetValue(cacheKey, out var cached) && DateTime.UtcNow < cached.ExpiresAt)
+                {
+                    byte[] cachedReply = (byte[])cached.Response.Clone();
+                    cachedReply[0] = query[0];
+                    cachedReply[1] = query[1];
+
+                    var fastReply = new byte[headerLength + cachedReply.Length];
+                    Buffer.BlockCopy(datagram, 0, fastReply, 0, headerLength);
+                    Buffer.BlockCopy(cachedReply, 0, fastReply, headerLength, cachedReply.Length);
+
+                    Interlocked.Add(ref _totalTxBytes, query.Length);
+                    Interlocked.Add(ref _totalRxBytes, cachedReply.Length);
+                    try
+                    {
+                        await udp.SendAsync(fastReply, clientEndpoint, token);
+                    }
+                    catch { }
+                    return;
+                }
+            }
+
             bool acquired;
             try
             {
@@ -330,6 +356,13 @@ namespace BeeVPN
                 Interlocked.Add(ref _totalTxBytes, query.Length);
 
                 byte[]? response = await ResolveOverTcpAsync(query, token);
+                if (response != null && response.Length > 12 && (response[3] & 0x0F) == 0 && query.Length >= 16)
+                {
+                    string cacheKey = Convert.ToBase64String(query, 12, query.Length - 12);
+                    _dnsCache[cacheKey] = new DnsCacheEntry(response, DateTime.UtcNow.AddSeconds(180));
+                    if (_dnsCache.Count > 1000) PruneDnsCache();
+                }
+
                 response ??= BuildServFail(query);
 
                 Interlocked.Add(ref _totalRxBytes, response.Length);
@@ -350,6 +383,18 @@ namespace BeeVPN
             finally
             {
                 _dnsConcurrency.Release();
+            }
+        }
+
+        private void PruneDnsCache()
+        {
+            var now = DateTime.UtcNow;
+            foreach (var kvp in _dnsCache)
+            {
+                if (kvp.Value.ExpiresAt <= now)
+                {
+                    _dnsCache.TryRemove(kvp.Key, out _);
+                }
             }
         }
 
@@ -562,7 +607,7 @@ namespace BeeVPN
 
         private async Task CopyCountingAsync(Stream from, Stream to, bool isRx, CancellationToken token)
         {
-            byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(32768);
+            byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(65536);
             try
             {
                 while (!token.IsCancellationRequested)
@@ -626,6 +671,18 @@ namespace BeeVPN
                 raw[5] = (byte)(port >> 8);
                 raw[6] = (byte)port;
                 return new SocksTarget(address, port, raw);
+            }
+        }
+
+        private sealed class DnsCacheEntry
+        {
+            public byte[] Response { get; }
+            public DateTime ExpiresAt { get; }
+
+            public DnsCacheEntry(byte[] response, DateTime expiresAt)
+            {
+                Response = response;
+                ExpiresAt = expiresAt;
             }
         }
     }

@@ -253,6 +253,7 @@
                             <StackPanel Grid.Column="2" HorizontalAlignment="Center">
                                 <TextBlock Text="DOWNLOAD" Foreground="#666666" FontSize="9" FontWeight="Bold" HorizontalAlignment="Center"/>
                                 <TextBlock x:Name="tvDownload" Text="0.0 MB" Foreground="#FFB800" FontSize="13" FontWeight="Bold" Margin="0,2,0,0" HorizontalAlignment="Center"/>
+                                <TextBlock x:Name="tvDownloadSpeed" Text="↓ 0.0 KB/s" Foreground="#FFA700" FontSize="9" FontWeight="SemiBold" HorizontalAlignment="Center"/>
                             </StackPanel>
 
                             <Border Grid.Column="3" Background="#242424"/>
@@ -261,6 +262,7 @@
                             <StackPanel Grid.Column="4" HorizontalAlignment="Center">
                                 <TextBlock Text="UPLOAD" Foreground="#666666" FontSize="9" FontWeight="Bold" HorizontalAlignment="Center"/>
                                 <TextBlock x:Name="tvUpload" Text="0.0 MB" Foreground="#E0E0E0" FontSize="13" FontWeight="Bold" Margin="0,2,0,0" HorizontalAlignment="Center"/>
+                                <TextBlock x:Name="tvUploadSpeed" Text="↑ 0.0 KB/s" Foreground="#888888" FontSize="9" FontWeight="SemiBold" HorizontalAlignment="Center"/>
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -292,13 +294,14 @@
                             <Grid Margin="0,0,0,6">
                                 <TextBlock Text="📜 LIVE LOGS" Foreground="#FFB800" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button x:Name="btnToggleLogs" Content="Hide" Background="#222222" Foreground="#CCCCCC" BorderBrush="#333333" BorderThickness="1" Padding="8,2" FontSize="10" Cursor="Hand" Click="BtnToggleLogs_Click" Margin="0,0,6,0"/>
                                     <Button x:Name="btnCopyLogs" Content="Copy" Background="#222222" Foreground="#CCCCCC" BorderBrush="#333333" BorderThickness="1" Padding="8,2" FontSize="10" Cursor="Hand" Click="BtnCopyLogs_Click" Margin="0,0,6,0"/>
                                     <Button x:Name="btnClearLogs" Content="Clear" Background="#222222" Foreground="#888888" BorderBrush="#333333" BorderThickness="1" Padding="8,2" FontSize="10" Cursor="Hand" Click="BtnClearLogs_Click"/>
                                 </StackPanel>
                             </Grid>
 
                             <!-- Terminal Box -->
-                            <Border Background="#0A0A0A" BorderBrush="#1F1F1F" BorderThickness="1" CornerRadius="6" Height="105">
+                            <Border x:Name="borderTerminal" Background="#0A0A0A" BorderBrush="#1F1F1F" BorderThickness="1" CornerRadius="6" Height="105">
                                 <TextBox x:Name="txtLogs" Background="Transparent" Foreground="#B0B0B0" BorderThickness="0" FontFamily="Consolas" FontSize="10" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Padding="6"/>
                             </Border>
                         </StackPanel>

@@ -46,7 +46,7 @@ namespace BeeVPN
             Directory.CreateDirectory(_dataDir);
         }
 
-        public void Start(string egressRegion = "", bool fastProtocols = false, bool tcpOnly = false)
+        public void Start(string egressRegion = "", bool fastProtocols = true, bool tcpOnly = false)
         {
             if (IsRunning) return;
 
@@ -333,6 +333,8 @@ namespace BeeVPN
                 ["SponsorId"] = "67DDC3614847FCEA",
                 ["DataRootDirectory"] = _dataDir,
                 ["TunnelWholeDevice"] = 0,
+                ["TunnelPoolSize"] = 2,
+                ["EstablishTunnelTimeoutSeconds"] = 20,
                 ["EgressRegion"] = string.IsNullOrWhiteSpace(egressRegion) ? "" : egressRegion.Trim().ToUpperInvariant(),
                 ["EmitDiagnosticNotices"] = true,
                 ["EmitDiagnosticNetworkParameters"] = true,

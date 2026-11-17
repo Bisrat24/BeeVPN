@@ -311,6 +311,16 @@
                     android:textColor="@color/bee_gold"
                     android:textSize="14sp"
                     android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_download_speed"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="↓ 0.0 KB/s"
+                    android:textColor="@color/bee_gold"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
             </LinearLayout>
 
             <View
@@ -342,6 +352,16 @@
                     android:text="0.0 MB"
                     android:textColor="@color/text_white"
                     android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_upload_speed"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="↑ 0.0 KB/s"
+                    android:textColor="@color/text_dim"
+                    android:textSize="10sp"
                     android:textStyle="bold" />
             </LinearLayout>
         </LinearLayout>
@@ -429,6 +449,20 @@
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:layout_alignParentEnd="true">
+
+                    <Button
+                        android:id="@+id/btn_toggle_logs"
+                        android:layout_width="wrap_content"
+                        android:layout_height="26dp"
+                        android:text="HIDE"
+                        android:textSize="10sp"
+                        android:textColor="@color/text_white"
+                        android:background="@drawable/badge_status_bg"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:minHeight="0dp"
+                        android:minWidth="0dp"
+                        android:layout_marginEnd="6dp" />
 
                     <Button
                         android:id="@+id/btn_copy_logs"
