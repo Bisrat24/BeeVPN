@@ -4,6 +4,29 @@ All notable changes to the BeeVPN project (both Android and Windows platforms) a
 
 ---
 
+## [v1.7.1] - 2026-11-18
+
+### 🎨 UI Polish (Android & Windows)
+- **Consistent mode colors:** DNS-only mode now uses a dedicated amber badge (new `badge_dns_bg.xml` and `status_dns` colors on Android; matching badge background on Windows) instead of the green "protected" treatment.
+- **Better hierarchy & touch targets:** the Android connection-state label now sits below the power button (matching Windows), log action buttons grew from 26 dp to 32 dp, and the app-routing card has a native ripple.
+- **Accessibility:** content descriptions on Android logo images and `AutomationProperties.Name` on the Windows icon-only title-bar and power buttons.
+- **Localized labels:** hardcoded Android layout strings moved into `strings.xml`.
+
+### ✨ Small Features
+- **Live exit regions:** regions discovered from the Psiphon core are now broadcast to the UI and merged into the exit-region picker, instead of being log-only.
+- **Mode-aware Quick Settings tile:** the Android tile reads `BeeVPN: DNS only / Traffic direct` when DNS-only mode is selected.
+- **Launcher shortcuts:** long-press the BeeVPN icon to launch straight into *Connect (Psiphon)* or *DNS only*.
+- **Copy connection summary:** one-tap clipboard copy of mode, region, protocol profile, duration, traffic, latency and routing scope on both platforms.
+- **Protection scope line:** an explicit summary under the connect button — *all apps routed* / *N apps tunneled* / *N apps bypassed* / *DNS only* / *system proxy fallback*.
+- **Fast→Compatible fallback notice:** the UI now explains when the fast protocol profile was unavailable.
+- **Version display, battery and always-on tools:** the Android header shows the installed version; new buttons open battery-optimization exemption and system VPN settings.
+- **Adaptive launcher icon:** themed/monochrome icon for Android 13+, with the original vector retained as the pre-26 fallback; portrait lock removed so landscape works.
+
+### 🔁 Lifecycle
+- Android reconnects only after a genuine network loss→return transition when a connection was requested; boot restore uses the same persisted flag.
+
+---
+
 ## [v1.7.0] - 2026-11-18
 
 ### 🛡️ Correctness & Privacy

@@ -1259,9 +1259,13 @@ namespace BeeVPN
 
             if (_isConnected)
             {
-                borderStatusBadge.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x0E, 0x2E, 0x1A));
-                borderStatusBadge.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1B, 0x5E, 0x36));
                 bool dnsOnly = _selectedMode != 0;
+                borderStatusBadge.Background = new SolidColorBrush(dnsOnly
+                    ? System.Windows.Media.Color.FromRgb(0x2E, 0x25, 0x0E)
+                    : System.Windows.Media.Color.FromRgb(0x0E, 0x2E, 0x1A));
+                borderStatusBadge.BorderBrush = new SolidColorBrush(dnsOnly
+                    ? System.Windows.Media.Color.FromRgb(0x5A, 0x48, 0x1A)
+                    : System.Windows.Media.Color.FromRgb(0x1B, 0x5E, 0x36));
                 tvStatusBadge.Text = dnsOnly ? "●  DNS ONLY" : "●  CONNECTED";
                 tvStatusBadge.Foreground = new SolidColorBrush(dnsOnly
                     ? System.Windows.Media.Color.FromRgb(0xFF, 0xB8, 0x00)
@@ -1337,6 +1341,61 @@ namespace BeeVPN
                 _notifyIcon.Text = "BeeVPN - Disconnected";
                 _menuItemToggleConnect.Text = "Connect";
                 _menuItemStatus.Text = "Status: Disconnected";
+            }
+            UpdateProtectionScope();
+        }
+
+        private void UpdateProtectionScope()
+        {
+            if (tvProtectionScope == null) return;
+            if (!_isConnected && !_isConnecting)
+            {
+                tvProtectionScope.Text = "Select a network mode and connect";
+                return;
+            }
+            if (_selectedMode != 0)
+            {
+                tvProtectionScope.Text = "DNS only - your IP traffic is NOT tunneled";
+                return;
+            }
+            if (_fullTunnel && _wintunTunnel.IsActive)
+            {
+                tvProtectionScope.Text = "Full-device tunnel - all apps routed";
+                return;
+            }
+            if (_fullTunnelFallback)
+            {
+                tvProtectionScope.Text = "System proxy fallback - apps that ignore proxies bypass BeeVPN";
+                return;
+            }
+            tvProtectionScope.Text = _isSplitTunnel
+                ? "Split tunnel - selected apps only"
+                : "System proxy - apps honouring Windows proxy settings";
+        }
+
+        private void BtnCopyInfo_Click(object sender, RoutedEventArgs e)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("BeeVPN connection summary");
+            sb.AppendLine($"Mode: {(_selectedMode == 0 ? "Psiphon" : "DNS only")}");
+            string region = GetSelectedRegion();
+            sb.AppendLine($"Region: {(string.IsNullOrEmpty(region) ? "Auto (fastest)" : region)}");
+            sb.AppendLine($"Profile: {(IsFastProfileSelected() ? "Fast (OSSH+TLS)" : "Compatible")}");
+            sb.AppendLine($"State: {tvConnectionState.Text}");
+            sb.AppendLine($"Duration: {tvDuration.Text}");
+            sb.AppendLine($"Download: {tvDownload.Text} ({tvDownloadSpeed.Text})");
+            sb.AppendLine($"Upload: {tvUpload.Text} ({tvUploadSpeed.Text})");
+            sb.AppendLine($"Latency: {tvLatency.Text}");
+            sb.AppendLine($"Routing: {tvProtectionScope.Text}");
+
+            try
+            {
+                System.Windows.Clipboard.SetText(sb.ToString());
+                AppendLog("UI", "Connection summary copied to clipboard.");
+            }
+            catch
+            {
+                System.Windows.MessageBox.Show("Could not access the clipboard.", "BeeVPN", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 

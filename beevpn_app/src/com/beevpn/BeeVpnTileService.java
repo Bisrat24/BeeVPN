@@ -81,12 +81,17 @@ public class BeeVpnTileService extends TileService {
 
         boolean running = BeeVpnService.isRunning();
         boolean connecting = BeeVpnService.isConnecting();
+        int mode = (running || connecting)
+                ? BeeVpnService.getCurrentMode()
+                : getSharedPreferences("beevpn_prefs", MODE_PRIVATE)
+                        .getInt("selected_mode", BeeVpnService.MODE_PSIPHON);
+        boolean dnsOnly = mode == BeeVpnService.MODE_CLOUDFLARE;
 
         if (running) {
             tile.setState(Tile.STATE_ACTIVE);
-            tile.setLabel("BeeVPN: Protected");
+            tile.setLabel(dnsOnly ? "BeeVPN: DNS only" : "BeeVPN: Protected");
             if (Build.VERSION.SDK_INT >= 29) {
-                tile.setSubtitle("Connected");
+                tile.setSubtitle(dnsOnly ? "Traffic direct" : "Connected");
             }
         } else if (connecting) {
             tile.setState(Tile.STATE_ACTIVE);
@@ -96,7 +101,7 @@ public class BeeVpnTileService extends TileService {
             }
         } else {
             tile.setState(Tile.STATE_INACTIVE);
-            tile.setLabel("BeeVPN");
+            tile.setLabel(dnsOnly ? "BeeVPN: DNS" : "BeeVPN");
             if (Build.VERSION.SDK_INT >= 29) {
                 tile.setSubtitle("Tap to connect");
             }

@@ -4,11 +4,17 @@
 
 Designed for speed, resilience against deep-packet inspection (DPI), and modern user ergonomics, BeeVPN provides both full-device tunneling and granular split-tunnel application routing.
 
-> **Current release: v1.7.0** — see [What's new in v1.7.0](#-whats-new-in-v170) and the [CHANGELOG](CHANGELOG.md).
+> **Current release: v1.7.1** — see [What's new in v1.7.1](#-whats-new-in-v171) and the [CHANGELOG](CHANGELOG.md).
 
 ---
 
-## 🆕 What's new in v1.7.0
+## 🆕 What's new in v1.7.1
+
+- **UI polish on both platforms:** amber DNS-only badges, clearer layout hierarchy, larger touch targets, accessibility names and localized labels.
+- **Small but useful features:** live exit-region picker, mode-aware Quick Settings tile, launcher shortcuts, one-tap connection-summary copy, explicit protection-scope line, version display, and battery/always-on helpers.
+- **Adaptive Android launcher icon** (Android 13+ themed icons) and landscape support.
+
+### What's new in v1.7.0
 
 - **Privacy fix:** DNS-only mode now captures resolvers hardcoded inside apps (1.1.1.1, 8.8.8.8 and IPv6 equivalents) instead of letting those queries go direct.
 - **Reliability:** failed connections now fall back from the Fast (OSSH/TLS-OSSH) profile to Compatible protocols automatically after 45 s, once per attempt.

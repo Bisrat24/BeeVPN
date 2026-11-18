@@ -131,10 +131,10 @@
 
                     <!-- Window Control Buttons (Minimize & Close) -->
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Template="{StaticResource TitleBtnTemplate}" Click="BtnMinimize_Click" Margin="0,0,4,0" ToolTip="Minimize to System Tray">
+                        <Button Template="{StaticResource TitleBtnTemplate}" Click="BtnMinimize_Click" Margin="0,0,4,0" ToolTip="Minimize to System Tray" AutomationProperties.Name="Minimize">
                             <TextBlock Text="—" Foreground="#888888" FontSize="11" Margin="0,0,0,2"/>
                         </Button>
-                        <Button Template="{StaticResource CloseBtnTemplate}" Click="BtnClose_Click" ToolTip="Close BeeVPN">
+                        <Button Template="{StaticResource CloseBtnTemplate}" Click="BtnClose_Click" ToolTip="Close BeeVPN" AutomationProperties.Name="Close">
                             <TextBlock Text="✕" Foreground="#AAAAAA" FontSize="11"/>
                         </Button>
                     </StackPanel>
@@ -193,9 +193,10 @@
 
                     <!-- Central Power Button Section -->
                     <StackPanel HorizontalAlignment="Center" Margin="0,2,0,8">
-                        <Button x:Name="btnToggleVpn" Template="{StaticResource PowerBtnTemplate}" Click="BtnToggleVpn_Click" Cursor="Hand"/>
+                        <Button x:Name="btnToggleVpn" Template="{StaticResource PowerBtnTemplate}" Click="BtnToggleVpn_Click" Cursor="Hand" AutomationProperties.Name="Connect or disconnect BeeVPN"/>
                         <TextBlock x:Name="tvConnectionState" Text="DISCONNECTED" Foreground="#777777" FontSize="12" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,8,0,2"/>
                         <TextBlock x:Name="tvHint" Text="Select network mode and click Connect" Foreground="#555555" FontSize="11" HorizontalAlignment="Center"/>
+                        <TextBlock x:Name="tvProtectionScope" Text="Select a network mode and connect" Foreground="#FFB800" FontSize="10" HorizontalAlignment="Center" TextWrapping="Wrap" Margin="0,4,0,0"/>
                     </StackPanel>
 
                     <!-- Server Fleet Card with Exact Vector Logo -->
@@ -226,7 +227,10 @@
                                 <TextBlock x:Name="tvServerSub" Text="Global obfuscated circumvention network" Foreground="#666666" FontSize="10"/>
                             </StackPanel>
 
-                            <TextBlock Grid.Column="2" x:Name="tvLatency" Text="○ Idle" Foreground="#666666" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <TextBlock x:Name="tvLatency" Text="○ Idle" Foreground="#666666" FontSize="11" FontWeight="Bold" HorizontalAlignment="Right"/>
+                                <Button x:Name="btnCopyInfo" Content="COPY INFO" Background="#222222" Foreground="#FFB800" BorderBrush="#3A3A3A" BorderThickness="1" Padding="6,2" FontSize="9" FontWeight="Bold" Cursor="Hand" Click="BtnCopyInfo_Click" Margin="0,4,0,0" AutomationProperties.Name="Copy connection summary"/>
+                            </StackPanel>
                         </Grid>
                     </Border>
 
@@ -268,7 +272,7 @@
                     </Border>
 
                     <!-- App Routing (Split Tunnel) Card - Matching Android -->
-                    <Border x:Name="cardAppRouting" Background="#161616" BorderBrush="#242424" BorderThickness="1" CornerRadius="10" Padding="12,10" Margin="0,0,0,8" Cursor="Hand" MouseLeftButtonUp="CardAppRouting_Click">
+                    <Border x:Name="cardAppRouting" Background="#161616" BorderBrush="#242424" BorderThickness="1" CornerRadius="10" Padding="12,10" Margin="0,0,0,8" Cursor="Hand" MouseLeftButtonUp="CardAppRouting_Click" ToolTip="Split routing here is launch-level: selected browsers/apps are started with proxy settings. It is not kernel-level per-app enforcement.">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>

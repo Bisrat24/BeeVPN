@@ -13,4 +13,6 @@
     <color name="text_white">#F8FAFC</color>
     <color name="text_gray">#94A3B8</color>
     <color name="text_dim">#64748B</color>
+    <color name="status_dns">#FBBF24</color>
+    <color name="status_dns_bg">#2E250E</color>
 </resources>

@@ -18,4 +18,26 @@
     <string name="notification_text">Your network traffic is encrypted and secured.</string>
     <string name="mode_psiphon">Psiphon Network (Global Bypass)</string>
     <string name="mode_cloudflare">Cloudflare DNS (1.1.1.1 Fast)</string>
+
+    <!-- UI labels previously hardcoded in the layout -->
+    <string name="label_network">NETWORK:</string>
+    <string name="label_exit_region">EXIT REGION:</string>
+    <string name="label_protocol">PROTOCOL:</string>
+    <string name="change">CHANGE ›</string>
+    <string name="logs_title">📜 LIVE CONNECTION LOGS</string>
+
+    <!-- v1.7.1 additions -->
+    <string name="copy_info">COPY INFO</string>
+    <string name="protection_idle">Select a network mode and tap to connect</string>
+    <string name="protection_all">All apps routed through the tunnel</string>
+    <string name="protection_selected">Tunneling %1$d selected app(s)</string>
+    <string name="protection_bypass">Bypassing %1$d app(s) — all others tunneled</string>
+    <string name="protection_dns">DNS only — your IP traffic is NOT tunneled</string>
+    <string name="btn_battery">BATTERY</string>
+    <string name="btn_always_on">ALWAYS-ON</string>
+    <string name="battery_title">Battery optimization</string>
+    <string name="battery_message">BeeVPN needs to keep running while the tunnel is active. Exempt it from battery optimization?</string>
+    <string name="about_version">BeeVPN v%1$s</string>
+    <string name="shortcut_connect">Connect (Psiphon)</string>
+    <string name="shortcut_dns">DNS only</string>
 </resources>

@@ -1,6 +1,7 @@
 package com.beevpn;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
@@ -14,9 +15,12 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
@@ -88,6 +92,10 @@ public class MainActivity extends Activity {
     private View mCardAppRouting;
     private TextView mTvAppRoutingSub;
 
+    private TextView mTvVersion;
+    private TextView mTvProtectionScope;
+    private String mStatusNotice = null;
+
     private TextView mTvLogs;
     private ScrollView mScrollLogs;
     private Button mBtnCopyLogs;
@@ -120,7 +128,10 @@ public class MainActivity extends Activity {
                     long txSpeed = intent.getLongExtra(BeeVpnService.EXTRA_TX_SPEED, 0);
                     int latency = intent.getIntExtra(BeeVpnService.EXTRA_LATENCY, -1);
                     mActiveMode = intent.getIntExtra(BeeVpnService.EXTRA_ACTIVE_MODE, mSelectedMode);
+                    mStatusNotice = intent.getStringExtra(BeeVpnService.EXTRA_NOTICE);
                     updateUiState(isConnected, isConnecting, statusMsg, durationSec, rxBytes, txBytes, rxSpeed, txSpeed, latency);
+                } else if (BeeVpnService.ACTION_REGIONS_UPDATE.equals(intent.getAction())) {
+                    mergeRegions(intent.getStringArrayListExtra(BeeVpnService.EXTRA_REGIONS));
                 } else if (LogManager.ACTION_NEW_LOG.equals(intent.getAction())) {
                     String line = intent.getStringExtra(LogManager.EXTRA_LOG_LINE);
                     if (line != null && mTvLogs != null) {
@@ -155,6 +166,9 @@ public class MainActivity extends Activity {
         mCardAppRouting = findViewById(R.id.card_app_routing);
         mTvAppRoutingSub = findViewById(R.id.tv_app_routing_sub);
 
+        mTvVersion = findViewById(R.id.tv_version);
+        mTvProtectionScope = findViewById(R.id.tv_protection_scope);
+
         mTvLogs = findViewById(R.id.tv_logs);
         mScrollLogs = findViewById(R.id.scroll_logs);
         mBtnCopyLogs = findViewById(R.id.btn_copy_logs);
@@ -182,6 +196,16 @@ public class MainActivity extends Activity {
         setupConnectionOptions();
 
         mBtnToggleVpn.setOnClickListener(v -> toggleVpn());
+
+        findViewById(R.id.btn_copy_info).setOnClickListener(v -> copyConnectionInfo());
+        findViewById(R.id.btn_battery).setOnClickListener(v -> promptBatteryOptimization());
+        findViewById(R.id.btn_always_on).setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(Settings.ACTION_VPN_SETTINGS));
+            } catch (Exception e) {
+                Toast.makeText(this, "Could not open system VPN settings", Toast.LENGTH_SHORT).show();
+            }
+        });
 
         if (mCardAppRouting != null) {
             mCardAppRouting.setOnClickListener(v -> showAppSelectionDialog());
@@ -211,6 +235,16 @@ public class MainActivity extends Activity {
         updateAppRoutingSubtitle();
         syncActiveMode();
         updateUiState(BeeVpnService.isRunning(), BeeVpnService.isConnecting(), null, 0, 0, 0, 0, 0, -1);
+
+        if (mTvVersion != null) {
+            try {
+                String version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+                mTvVersion.setText(getString(R.string.about_version, version == null ? "?" : version));
+            } catch (Exception e) {
+                mTvVersion.setText("");
+            }
+        }
+        handleShortcutIntent(getIntent());
     }
 
     private void syncActiveMode() {
@@ -827,6 +861,7 @@ public class MainActivity extends Activity {
         super.onResume();
         IntentFilter filter = new IntentFilter();
         filter.addAction(BeeVpnService.ACTION_STATUS_UPDATE);
+        filter.addAction(BeeVpnService.ACTION_REGIONS_UPDATE);
         filter.addAction(LogManager.ACTION_NEW_LOG);
         registerReceiver(mStatusReceiver, filter);
 
@@ -897,7 +932,7 @@ public class MainActivity extends Activity {
 
             boolean dnsOnly = mActiveMode == BeeVpnService.MODE_CLOUDFLARE;
             mTvStatusBadge.setText(dnsOnly ? "DNS ONLY" : getString(R.string.status_connected_desc));
-            mTvStatusBadge.setBackgroundResource(dnsOnly ? R.drawable.badge_status_bg : R.drawable.badge_connected_bg);
+            mTvStatusBadge.setBackgroundResource(dnsOnly ? R.drawable.badge_dns_bg : R.drawable.badge_connected_bg);
             mTvStatusBadge.setTextColor(resolveColor(dnsOnly ? R.color.bee_gold : R.color.status_connected));
 
             String modeName = statusMsg != null ? statusMsg : (dnsOnly ? "DNS-ONLY MODE" : "PSIPHON ACTIVE");
@@ -994,6 +1029,128 @@ public class MainActivity extends Activity {
             mSpinnerMode.setEnabled(true);
             mSpinnerMode.setAlpha(1f);
         }
+        updateProtectionScope();
+    }
+
+    private void handleShortcutIntent(Intent intent) {
+        if (intent == null) return;
+        if (!intent.getBooleanExtra("com.beevpn.extra.SHORTCUT_CONNECT", false)) return;
+        setIntent(new Intent(this, MainActivity.class)); // do not replay after rotation
+
+        int mode = BeeVpnService.MODE_PSIPHON;
+        try {
+            String rawMode = intent.getStringExtra("com.beevpn.extra.SHORTCUT_MODE");
+            mode = Integer.parseInt(rawMode == null ? "0" : rawMode);
+        } catch (Exception ignored) {}
+        mode = (mode == BeeVpnService.MODE_CLOUDFLARE)
+                ? BeeVpnService.MODE_CLOUDFLARE : BeeVpnService.MODE_PSIPHON;
+
+        mSelectedMode = mode;
+        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit().putInt(KEY_MODE, mode).apply();
+        mSpinnerMode.setSelection(mode);
+        updateServerCardText(mode);
+        updateOptionAvailability();
+
+        if (BeeVpnService.isRunning() || BeeVpnService.isConnecting()) {
+            Toast.makeText(this, "BeeVPN is already active", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        toggleVpn();
+    }
+
+    private void mergeRegions(ArrayList<String> liveRegions) {
+        if (mRegionAdapter == null || liveRegions == null) return;
+        boolean changed = false;
+        for (String region : liveRegions) {
+            if (region == null || region.trim().isEmpty()) continue;
+            boolean exists = false;
+            for (int i = 0; i < mRegionAdapter.getCount(); i++) {
+                if (region.equals(mRegionAdapter.getItem(i))) { exists = true; break; }
+            }
+            if (!exists) {
+                mRegionAdapter.add(region);
+                changed = true;
+            }
+        }
+        if (changed) {
+            mRegionAdapter.notifyDataSetChanged();
+            selectSavedRegion();
+        }
+    }
+
+    private void updateProtectionScope() {
+        if (mTvProtectionScope == null) return;
+        if (mStatusNotice != null && !mStatusNotice.isEmpty()) {
+            mTvProtectionScope.setText(mStatusNotice);
+            return;
+        }
+        if (!BeeVpnService.isRunning() && !BeeVpnService.isConnecting()) {
+            mTvProtectionScope.setText(R.string.protection_idle);
+            return;
+        }
+        if (mActiveMode == BeeVpnService.MODE_CLOUDFLARE) {
+            mTvProtectionScope.setText(R.string.protection_dns);
+            return;
+        }
+        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+        int routingMode = prefs.getInt(KEY_ROUTING_MODE, -1);
+        Set<String> selected = prefs.getStringSet(KEY_SELECTED_PACKAGES, null);
+        int count = selected == null ? 0 : selected.size();
+        if (routingMode == ROUTING_ONLY_SELECTED) {
+            mTvProtectionScope.setText(getString(R.string.protection_selected, count));
+        } else if (routingMode == ROUTING_BYPASS_SELECTED) {
+            mTvProtectionScope.setText(getString(R.string.protection_bypass, count));
+        } else {
+            mTvProtectionScope.setText(R.string.protection_all);
+        }
+    }
+
+    private void copyConnectionInfo() {
+        StringBuilder sb = new StringBuilder("BeeVPN connection summary\n");
+        sb.append("Mode: ").append(mActiveMode == BeeVpnService.MODE_PSIPHON ? "Psiphon" : "DNS only").append('\n');
+        sb.append("Region: ").append(mSelectedRegion == null || mSelectedRegion.isEmpty()
+                ? "Auto (fastest)" : mSelectedRegion).append('\n');
+        sb.append("Profile: ").append(getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_FAST_PROTOCOLS, true) ? "Fast (OSSH+TLS)" : "Compatible").append('\n');
+        sb.append("State: ").append(mTvConnectionState.getText()).append('\n');
+        sb.append("Duration: ").append(mTvDuration.getText()).append('\n');
+        sb.append("Download: ").append(mTvDownload.getText()).append(" (")
+                .append(mTvDownloadSpeed.getText()).append(")\n");
+        sb.append("Upload: ").append(mTvUpload.getText()).append(" (")
+                .append(mTvUploadSpeed.getText()).append(")\n");
+        sb.append("Latency: ").append(mTvLatency.getText()).append('\n');
+        if (mStatusNotice != null && !mStatusNotice.isEmpty()) {
+            sb.append("Notice: ").append(mStatusNotice).append('\n');
+        }
+
+        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm != null) {
+            cm.setPrimaryClip(ClipData.newPlainText("BeeVPN Connection", sb.toString()));
+            Toast.makeText(this, "Connection info copied", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void promptBatteryOptimization() {
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        if (pm.isIgnoringBatteryOptimizations(getPackageName())) {
+            Toast.makeText(this, "BeeVPN is already exempt", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.battery_title)
+                .setMessage(R.string.battery_message)
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    try {
+                        startActivity(new Intent(
+                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:" + getPackageName())));
+                    } catch (Exception e) {
+                        Toast.makeText(this, "Could not open battery settings", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
     }
 
     private void startConnectPulse() {

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="connect_psiphon"
+        android:enabled="true"
+        android:icon="@drawable/ic_bee_logo"
+        android:shortcutShortLabel="@string/shortcut_connect"
+        android:shortcutLongLabel="@string/shortcut_connect">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.beevpn"
+            android:targetClass="com.beevpn.MainActivity">
+            <extra android:name="com.beevpn.extra.SHORTCUT_MODE" android:value="0" />
+            <extra android:name="com.beevpn.extra.SHORTCUT_CONNECT" android:value="true" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="connect_dns"
+        android:enabled="true"
+        android:icon="@drawable/ic_bee_logo"
+        android:shortcutShortLabel="@string/shortcut_dns"
+        android:shortcutLongLabel="@string/shortcut_dns">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.beevpn"
+            android:targetClass="com.beevpn.MainActivity">
+            <extra android:name="com.beevpn.extra.SHORTCUT_MODE" android:value="1" />
+            <extra android:name="com.beevpn.extra.SHORTCUT_CONNECT" android:value="true" />
+        </intent>
+    </shortcut>
+</shortcuts>

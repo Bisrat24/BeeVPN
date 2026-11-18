@@ -4,10 +4,14 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Handler;
@@ -31,6 +35,7 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -52,6 +57,7 @@ public class BeeVpnService extends VpnService {
     public static final String ACTION_CONNECT = "com.beevpn.ACTION_CONNECT";
     public static final String ACTION_DISCONNECT = "com.beevpn.ACTION_DISCONNECT";
     public static final String ACTION_STATUS_UPDATE = "com.beevpn.ACTION_STATUS_UPDATE";
+    public static final String ACTION_REGIONS_UPDATE = "com.beevpn.ACTION_REGIONS_UPDATE";
 
     public static final String EXTRA_MODE = "extra_mode";
     public static final int MODE_PSIPHON = 0;
@@ -67,6 +73,8 @@ public class BeeVpnService extends VpnService {
     public static final String EXTRA_TX_SPEED = "extra_tx_speed";
     public static final String EXTRA_LATENCY = "extra_latency";
     public static final String EXTRA_ACTIVE_MODE = "extra_active_mode";
+    public static final String EXTRA_REGIONS = "extra_regions";
+    public static final String EXTRA_NOTICE = "extra_notice";
 
     private static final String CHANNEL_ID = "beevpn_channel";
     private static final String CHANNEL_ALERTS_ID = "beevpn_alerts";
@@ -142,6 +150,11 @@ public class BeeVpnService extends VpnService {
     private final ConcurrentHashMap<String, DnsCacheEntry> mDnsCache = new ConcurrentHashMap<>();
 
     private Handler mHandler;
+    // Transient user-facing note (e.g. "Compatible profile in use") carried in
+    // status broadcasts so the UI can explain a non-obvious state change.
+    private volatile String mStatusNotice = null;
+    private volatile boolean mNetworkLost = false;
+    private BroadcastReceiver mNetworkReceiver = null;
 
     public static boolean isRunning() {
         return sIsRunning;
@@ -173,6 +186,37 @@ public class BeeVpnService extends VpnService {
         } catch (Throwable t) {
             LogManager.log("WARN", "Native tun2socks logger init: " + t.getMessage());
         }
+
+        // Only reconnect on a genuine loss->return transition, so a normal
+        // onAvailable at startup never triggers a duplicate connection.
+        mNetworkReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                ConnectivityManager cm =
+                        (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm == null) return;
+                NetworkInfo info = cm.getActiveNetworkInfo();
+                boolean online = info != null && info.isConnected();
+                if (!online) {
+                    mNetworkLost = true;
+                    return;
+                }
+                if (!mNetworkLost) return;
+                mNetworkLost = false;
+
+                SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                if (!prefs.getBoolean(PREF_SHOULD_CONNECT, false)) return;
+                if (sIsRunning || sIsConnecting) return;
+                LogManager.log("NET", "Network returned; restoring the BeeVPN tunnel.");
+                startVpn(prefs.getInt(PREF_MODE, MODE_PSIPHON));
+            }
+        };
+        try {
+            registerReceiver(mNetworkReceiver,
+                    new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
+        } catch (Exception e) {
+            LogManager.log("WARN", "Network change monitoring unavailable: " + e.getMessage());
+        }
     }
 
     @Override
@@ -181,6 +225,7 @@ public class BeeVpnService extends VpnService {
 
         if (intent != null && ACTION_DISCONNECT.equals(intent.getAction())) {
             LogManager.log("CORE", "Disconnect command received from user.");
+            mStatusNotice = null;
             prefs.edit().putBoolean(PREF_SHOULD_CONNECT, false).apply();
             stopVpn();
             return START_NOT_STICKY;
@@ -221,7 +266,7 @@ public class BeeVpnService extends VpnService {
         if (nm != null) {
             nm.cancel(NOTIFICATION_DISCONNECTED_ID);
         }
-        startForeground(NOTIFICATION_ID, buildNotification("BeeVPN Tunnel", "Securing connection..."));
+        startForeground(NOTIFICATION_ID, buildNotification("BeeVPN Tunnel", "Securing connection...", false));
 
         mStartTime = 0;
         mRxBytes.set(0);
@@ -791,6 +836,7 @@ public class BeeVpnService extends VpnService {
                 if (fastProfile && !mCompatibilityFallbackUsed) {
                     mCompatibilityFallbackUsed = true;
                     LogManager.log("WARN", "Fast profile did not establish in 45s; retrying once with Compatible protocols.");
+                    mStatusNotice = "Compatible profile in use (fast profile unavailable)";
                     prefs.edit().putBoolean(PREF_FAST_PROTOCOLS, false).apply();
                     stopVpn();
                     Intent retry = new Intent(this, BeeVpnService.class);
@@ -928,6 +974,10 @@ public class BeeVpnService extends VpnService {
                 @Override
                 public void onAvailableEgressRegions(List<String> regions) {
                     LogManager.log("REGIONS", "Exit regions available: " + regions.size() + " regions (" + regions + ")");
+                    Intent regionIntent = new Intent(ACTION_REGIONS_UPDATE);
+                    regionIntent.setPackage(getPackageName());
+                    regionIntent.putStringArrayListExtra(EXTRA_REGIONS, new ArrayList<>(regions));
+                    sendBroadcast(regionIntent);
                 }
 
                 @Override
@@ -1423,6 +1473,7 @@ public class BeeVpnService extends VpnService {
         intent.putExtra(EXTRA_TX_SPEED, mTxSpeedBps);
         intent.putExtra(EXTRA_LATENCY, mMeasuredLatencyMs);
         intent.putExtra(EXTRA_ACTIVE_MODE, sCurrentMode);
+        intent.putExtra(EXTRA_NOTICE, mStatusNotice);
         sendBroadcast(intent);
     }
 
@@ -1449,7 +1500,7 @@ public class BeeVpnService extends VpnService {
         }
     }
 
-    private Notification buildNotification(String title, String text) {
+    private Notification buildNotification(String title, String text, boolean dnsOnly) {
         Intent mainIntent = new Intent(this, MainActivity.class);
         PendingIntent pi = PendingIntent.getActivity(this, 0, mainIntent, PendingIntent.FLAG_IMMUTABLE);
 
@@ -1466,7 +1517,9 @@ public class BeeVpnService extends VpnService {
 
         return nb.setContentTitle(title)
                 .setContentText(text)
-                .setSmallIcon(android.R.drawable.stat_sys_upload)
+                .setSmallIcon(dnsOnly
+                        ? android.R.drawable.ic_dialog_info
+                        : android.R.drawable.stat_sys_upload)
                 .setContentIntent(pi)
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Disconnect", pDisconnect)
                 .setOngoing(true)
@@ -1476,12 +1529,16 @@ public class BeeVpnService extends VpnService {
     private void updateNotification(String title, String text) {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {
-            nm.notify(NOTIFICATION_ID, buildNotification(title, text));
+            nm.notify(NOTIFICATION_ID, buildNotification(title, text, sCurrentMode == MODE_CLOUDFLARE));
         }
     }
 
     @Override
     public void onDestroy() {
+        if (mNetworkReceiver != null) {
+            try { unregisterReceiver(mNetworkReceiver); } catch (Exception ignored) {}
+            mNetworkReceiver = null;
+        }
         stopVpn();
         super.onDestroy();
     }
