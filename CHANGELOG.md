@@ -4,6 +4,28 @@ All notable changes to the BeeVPN project (both Android and Windows platforms) a
 
 ---
 
+## [v1.7.0] - 2026-11-18
+
+### 🛡️ Correctness & Privacy
+- **Version metadata synchronized:** Android manifest (`versionCode 6`, `versionName 1.7.0`) and Windows assembly version now match the release notes. The Android build script reads the version directly from the manifest, so it can no longer drift.
+- **DNS mode now captures hardcoded resolvers (Android):** routes for `1.1.1.1`, `1.0.0.1`, `8.8.8.8`, `8.8.4.4` (and their IPv6 equivalents) are added to the DNS-mode TUN. Apps that embed their own resolver can no longer silently bypass DNS protection. Exempted DoT/UDP sockets are `protect()`-ed **before** connecting so they cannot be pulled back into the tunnel.
+- **DNS cache is TTL-aware and question-keyed:** cached responses now honour the answer record TTL (clamped to 30–180 s) instead of a fixed 180 s, and keys use only QNAME/QTYPE/QCLASS so EDNS0 padding no longer defeats caching.
+- **Safe service restart (Android):** a sticky restart with a null intent now reconnects only when a persisted "should connect" flag is set. An explicit disconnect stays disconnected across process death.
+- **Adapter-name validation (Windows):** physical adapter names are validated before being written into `netsh` route scripts, closing an injection path from unusual adapter names.
+
+### ⚡ Connection Reliability
+- **One-shot Fast → Compatible fallback (both platforms):** a connection that fails to establish within **45 s** (down from 75 s Android / 90 s Windows) automatically retries once with all protocols enabled. The choice is logged and persisted, so there is no retry loop and no silent failure.
+- **Lower probe overhead:** the latency probe now runs every 10 s instead of 5 s; each probe opens a tunneled TCP connection, so the old cadence distorted the speedometer under load.
+- **Healthier Quick Settings tile (Android):** the tile now listens for status broadcasts while visible, so it no longer shows a stale state right after a tap.
+
+### 🎨 Honest Mode Labeling
+- **"Cloudflare DNS" is now clearly labeled DNS-only** on both platforms, with amber status badges and explicit wording that IP traffic is **not** tunneled. Previously the green "DNS ACTIVE" badge and power button implied full VPN protection.
+
+### 🔨 Build & Tooling
+- `build_beevpn.ps1` is now location-independent (derived from `$PSScriptRoot`), prints the version it is building, and supports release signing via `-Release` with `-Keystore` / `-StorePass` / `-KeyAlias` (or `BEEVPN_KEYSTORE`, `BEEVPN_STOREPASS`, `BEEVPN_KEYALIAS` environment variables). Debug signing remains the default for local development.
+
+---
+
 ## [v1.6.0] - 2026-11-17
 
 ### ⚡ Connection Speed & Performance

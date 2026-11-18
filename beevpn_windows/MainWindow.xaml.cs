@@ -29,6 +29,7 @@ namespace BeeVPN
         private bool _isIntentionalStop = false;
         private bool _suppressOptionSave = false;
         private bool _isExiting = false;
+        private bool _autoFallbackUsed = false;
         private System.Threading.Tasks.Task? _stopTask;
 
         private long _rxBytes = 0;
@@ -73,7 +74,7 @@ namespace BeeVPN
 
             _connectTimeoutTimer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromSeconds(90)
+                Interval = TimeSpan.FromSeconds(45)
             };
             _connectTimeoutTimer.Tick += ConnectTimeoutTimer_Tick;
 
@@ -282,7 +283,7 @@ namespace BeeVPN
             else
             {
                 tvServerTitle.Text = "Cloudflare DNS (1.1.1.1)";
-                tvServerSub.Text = "Fast public DNS resolver (bypasses DNS filtering)";
+                tvServerSub.Text = "DNS only - your IP traffic is NOT tunneled";
                 cardAppRouting.Visibility = Visibility.Collapsed;
                 AppendLog("UI", "Selected mode: Cloudflare DNS (1.1.1.1 Fast)");
             }
@@ -484,8 +485,10 @@ namespace BeeVPN
             }
         }
 
-        private void ConnectVpn()
+        private void ConnectVpn(bool isAutomaticRetry = false)
         {
+            if (!isAutomaticRetry) _autoFallbackUsed = false;
+
             if (_selectedMode == 0 && _fullTunnel && !ElevationHelper.IsAdministrator)
             {
                 AppendLog("TUN", "Full-device tunnel needs administrator rights. Requesting elevation...");
@@ -564,12 +567,12 @@ namespace BeeVPN
                     _isConnecting = false;
                     _connectTime = DateTime.Now;
                     _statsTimer.Start();
-                    AppendLog("DNS", "CONNECTED! Fast DNS active via Cloudflare 1.1.1.1 (general traffic direct).");
+                    AppendLog("DNS", "DNS-only mode active via Cloudflare 1.1.1.1. General traffic is direct and NOT tunneled.");
                     UpdateUiState();
                     _notifyIcon.ShowBalloonTip(
                         3000,
-                        "BeeVPN DNS Active",
-                        "Fast DNS resolver is active (1.1.1.1). General traffic is direct.",
+                        "BeeVPN DNS Only",
+                        "DNS resolver is active (1.1.1.1). Your IP traffic is NOT tunneled.",
                         Forms.ToolTipIcon.Info
                     );
                 }
@@ -875,7 +878,7 @@ namespace BeeVPN
 
             if (_isConnected)
             {
-                string shortMode = _selectedMode == 0 ? (_fullTunnel ? "Full Tunnel" : "Psiphon") : "DNS Active";
+                string shortMode = _selectedMode == 0 ? (_fullTunnel ? "Full Tunnel" : "Psiphon") : "DNS Only";
                 string tip = $"BeeVPN: {shortMode} (↓{FormatTraffic(_rxBytes)} ↑{FormatTraffic(_txBytes)})";
                 if (tip.Length < 64) _notifyIcon.Text = tip;
             }
@@ -930,7 +933,19 @@ namespace BeeVPN
             _connectTimeoutTimer.Stop();
             if (!_isConnecting) return;
 
-            AppendLog("ERROR", "Connection timed out after 90 seconds. Check your network and try again.");
+            // One automatic escalation from the fast profile to full protocol
+            // support; heavy filtering or tactics can make OSSH-only stall.
+            if (IsFastProfileSelected() && !_autoFallbackUsed)
+            {
+                _autoFallbackUsed = true;
+                comboProtocol.SelectedIndex = 1; // Compatible (all protocols)
+                AppendLog("WARN", "Fast profile did not establish in 45s; retrying once with Compatible protocols.");
+                DisconnectVpn();
+                ConnectVpn(isAutomaticRetry: true);
+                return;
+            }
+
+            AppendLog("ERROR", "Connection timed out after 45 seconds. Check your network and try again.");
             DisconnectVpn();
             _notifyIcon.ShowBalloonTip(
                 3000,
@@ -1246,11 +1261,16 @@ namespace BeeVPN
             {
                 borderStatusBadge.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x0E, 0x2E, 0x1A));
                 borderStatusBadge.BorderBrush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x1B, 0x5E, 0x36));
-                tvStatusBadge.Text = _selectedMode == 0 ? "●  CONNECTED" : "●  DNS ACTIVE";
-                tvStatusBadge.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
+                bool dnsOnly = _selectedMode != 0;
+                tvStatusBadge.Text = dnsOnly ? "●  DNS ONLY" : "●  CONNECTED";
+                tvStatusBadge.Foreground = new SolidColorBrush(dnsOnly
+                    ? System.Windows.Media.Color.FromRgb(0xFF, 0xB8, 0x00)
+                    : System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
 
-                tvConnectionState.Text = _selectedMode == 0 ? "PSIPHON ACTIVE" : "CLOUDFLARE DNS ACTIVE";
-                tvConnectionState.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
+                tvConnectionState.Text = dnsOnly ? "DNS-ONLY MODE (NOT A VPN)" : "PSIPHON ACTIVE";
+                tvConnectionState.Foreground = new SolidColorBrush(dnsOnly
+                    ? System.Windows.Media.Color.FromRgb(0xFF, 0xB8, 0x00)
+                    : System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
 
                 bool fullTunnelActive = _selectedMode == 0 && _wintunTunnel.IsActive;
 
@@ -1258,7 +1278,7 @@ namespace BeeVPN
                     ? (fullTunnelActive
                         ? "All device traffic is encrypted and routed through the tunnel"
                         : _isSplitTunnel ? "Split tunnel active: selected apps routed" : "Traffic is encrypted and securely routed")
-                    : "DNS queries routed via 1.1.1.1 (general traffic direct)";
+                    : "DNS only (1.1.1.1) - your IP address and traffic are NOT hidden";
                 tvLatency.Text = _measuredLatency > 0 ? $"● {_measuredLatency} ms" : "○ Measuring";
                 tvLatency.Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0xE6, 0x76));
 
@@ -1267,7 +1287,7 @@ namespace BeeVPN
                 // Update System Tray
                 string connectedLabel = _selectedMode == 0
                     ? (fullTunnelActive ? "Connected (Full Tunnel)" : "Connected (Psiphon)")
-                    : "DNS Active (1.1.1.1)";
+                    : "DNS Only (traffic direct)";
                 _notifyIcon.Text = $"BeeVPN: {connectedLabel}";
                 _menuItemToggleConnect.Text = "Disconnect";
                 _menuItemStatus.Text = $"Status: {connectedLabel}";

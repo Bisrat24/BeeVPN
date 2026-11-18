@@ -895,18 +895,19 @@ public class MainActivity extends Activity {
             mBtnToggleVpn.setText(R.string.disconnect);
             mBtnToggleVpn.setBackgroundResource(R.drawable.btn_disconnect_bg);
 
-            mTvStatusBadge.setText(mActiveMode == BeeVpnService.MODE_PSIPHON ? getString(R.string.status_connected_desc) : "DNS ACTIVE");
-            mTvStatusBadge.setBackgroundResource(R.drawable.badge_connected_bg);
-            mTvStatusBadge.setTextColor(resolveColor(R.color.status_connected));
+            boolean dnsOnly = mActiveMode == BeeVpnService.MODE_CLOUDFLARE;
+            mTvStatusBadge.setText(dnsOnly ? "DNS ONLY" : getString(R.string.status_connected_desc));
+            mTvStatusBadge.setBackgroundResource(dnsOnly ? R.drawable.badge_status_bg : R.drawable.badge_connected_bg);
+            mTvStatusBadge.setTextColor(resolveColor(dnsOnly ? R.color.bee_gold : R.color.status_connected));
 
-            String modeName = statusMsg != null ? statusMsg : (mActiveMode == BeeVpnService.MODE_PSIPHON ? "PSIPHON ACTIVE" : "CLOUDFLARE DNS ACTIVE");
+            String modeName = statusMsg != null ? statusMsg : (dnsOnly ? "DNS-ONLY MODE" : "PSIPHON ACTIVE");
             mTvConnectionState.setText(modeName.toUpperCase(Locale.US));
-            mTvConnectionState.setTextColor(resolveColor(R.color.status_connected));
+            mTvConnectionState.setTextColor(resolveColor(dnsOnly ? R.color.bee_gold : R.color.status_connected));
 
-            if (mActiveMode == BeeVpnService.MODE_PSIPHON) {
+            if (!dnsOnly) {
                 mTvHint.setText("Traffic is encrypted and securely routed");
             } else {
-                mTvHint.setText("DNS encrypted via DoT; general traffic is direct");
+                mTvHint.setText("DNS encrypted only - your IP traffic is NOT tunneled");
             }
 
             long hrs = durationSec / 3600;

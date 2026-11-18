@@ -1,6 +1,9 @@
 package com.beevpn;
 
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.net.VpnService;
 import android.os.Build;
 import android.service.quicksettings.Tile;
@@ -8,10 +11,40 @@ import android.service.quicksettings.TileService;
 
 public class BeeVpnTileService extends TileService {
 
+    private boolean mReceiverRegistered = false;
+    private final BroadcastReceiver mStatusReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (BeeVpnService.ACTION_STATUS_UPDATE.equals(intent.getAction())) {
+                updateTileState();
+            }
+        }
+    };
+
     @Override
     public void onStartListening() {
         super.onStartListening();
+        if (!mReceiverRegistered) {
+            try {
+                registerReceiver(mStatusReceiver, new IntentFilter(BeeVpnService.ACTION_STATUS_UPDATE));
+                mReceiverRegistered = true;
+            } catch (Exception ignored) {
+                // A duplicated registration is harmless; the next onStartListening retries.
+            }
+        }
         updateTileState();
+    }
+
+    @Override
+    public void onStopListening() {
+        if (mReceiverRegistered) {
+            try {
+                unregisterReceiver(mStatusReceiver);
+            } catch (Exception ignored) {
+            }
+            mReceiverRegistered = false;
+        }
+        super.onStopListening();
     }
 
     @Override

@@ -76,6 +76,10 @@ public class BeeVpnService extends VpnService {
     private static final String PREFS_NAME = "beevpn_prefs";
     private static final String PREF_EGRESS_REGION = "egress_region";
     private static final String PREF_FAST_PROTOCOLS = "fast_protocols";
+    private static final String PREF_MODE = "selected_mode";
+    // Persisted so a service restart (START_STICKY) never reconnects after the
+    // user explicitly disconnected, but survives process death while connected.
+    private static final String PREF_SHOULD_CONNECT = "should_connect";
 
     private static volatile boolean sIsRunning = false;
     private static volatile boolean sIsConnecting = false;
@@ -91,6 +95,8 @@ public class BeeVpnService extends VpnService {
     private volatile boolean mIsTunnelConnected = false;
     private Runnable mConnectTimeoutRunnable = null;
     private java.util.concurrent.ExecutorService mDnsExecutor = null;
+    // Guards the one-time Fast -> Compatible retry on connection timeout.
+    private boolean mCompatibilityFallbackUsed = false;
 
     private static final String DOT_HOST = "cloudflare-dns.com";
     private static final String DOT_SERVER = "1.1.1.1";
@@ -171,16 +177,30 @@ public class BeeVpnService extends VpnService {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+
         if (intent != null && ACTION_DISCONNECT.equals(intent.getAction())) {
             LogManager.log("CORE", "Disconnect command received from user.");
+            prefs.edit().putBoolean(PREF_SHOULD_CONNECT, false).apply();
             stopVpn();
             return START_NOT_STICKY;
         }
 
-        int mode = MODE_PSIPHON;
-        if (intent != null) {
-            mode = intent.getIntExtra(EXTRA_MODE, MODE_PSIPHON);
+        // START_STICKY restarts can deliver a null intent. Only reconnect when a
+        // connection was explicitly requested; otherwise a user disconnect would
+        // silently come back after the OS recycled the service.
+        if (intent == null) {
+            if (!prefs.getBoolean(PREF_SHOULD_CONNECT, false)) {
+                LogManager.log("CORE", "Restarted without a pending connection request; staying stopped.");
+                stopSelf();
+                return START_NOT_STICKY;
+            }
+            LogManager.log("CORE", "Restoring connection after service restart.");
+            startVpn(prefs.getInt(PREF_MODE, MODE_PSIPHON));
+            return START_STICKY;
         }
+
+        int mode = intent.getIntExtra(EXTRA_MODE, MODE_PSIPHON);
         sCurrentMode = mode;
 
         startVpn(mode);
@@ -189,6 +209,12 @@ public class BeeVpnService extends VpnService {
 
     private synchronized void startVpn(int mode) {
         if (sIsRunning || sIsConnecting) return;
+
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putBoolean(PREF_SHOULD_CONNECT, true)
+                .putInt(PREF_MODE, mode)
+                .apply();
+        mCompatibilityFallbackUsed = false;
 
         createNotificationChannel();
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -228,6 +254,22 @@ public class BeeVpnService extends VpnService {
             builder.addDnsServer("10.8.0.3");
             builder.addRoute("10.8.0.3", 32);
 
+            // Capture resolvers hardcoded inside apps. Without these routes, an app
+            // that talks directly to 1.1.1.1 or 8.8.8.8 completely bypasses DNS
+            // protection. The DoT/UDP sockets are protect()-ed, so they still exit
+            // directly and cannot loop back into the TUN.
+            String[] publicResolversV4 = {"1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4"};
+            for (String resolver : publicResolversV4) {
+                try { builder.addRoute(resolver, 32); } catch (Exception ignored) {}
+            }
+            String[] publicResolversV6 = {
+                    "2606:4700:4700::1111", "2606:4700:4700::1001",
+                    "2001:4860:4860::8888", "2001:4860:4860::8844"
+            };
+            for (String resolver : publicResolversV6) {
+                try { builder.addRoute(resolver, 128); } catch (Exception ignored) {}
+            }
+
             // Prevent IPv6 DNS bypass on dual-stack carrier networks
             try {
                 builder.addAddress("fd00:bee::2", 64);
@@ -256,7 +298,7 @@ public class BeeVpnService extends VpnService {
             mDotRetryAfterMs = 0;
             mDnsQueueWarned = false;
             LogManager.log("DNS", "ACTIVE! Encrypted DNS resolver online (DoT with UDP/53 fallback). General device traffic is direct.");
-            updateNotification("BeeVPN DNS Active", "DNS encrypted (general traffic direct)");
+            updateNotification("BeeVPN DNS Only", "DNS encrypted - IP traffic direct");
             broadcastStatus(true, false, mLastStatusMsg);
 
             startDnsWorker();
@@ -376,8 +418,8 @@ public class BeeVpnService extends VpnService {
     }
 
     private byte[] resolveDnsQuery(byte[] query) {
-        if (query.length >= 16) {
-            String cacheKey = android.util.Base64.encodeToString(query, 12, query.length - 12, android.util.Base64.NO_WRAP);
+        String cacheKey = dnsCacheKey(query);
+        if (cacheKey != null) {
             DnsCacheEntry cached = mDnsCache.get(cacheKey);
             if (cached != null && SystemClock.elapsedRealtime() < cached.expiresAt) {
                 byte[] hit = cached.response.clone();
@@ -415,12 +457,80 @@ public class BeeVpnService extends VpnService {
             response = resolveUdp(query);
         }
 
-        if (response != null && response.length > 12 && (response[3] & 0x0F) == 0 && query.length >= 16) {
-            String cacheKey = android.util.Base64.encodeToString(query, 12, query.length - 12, android.util.Base64.NO_WRAP);
-            mDnsCache.put(cacheKey, new DnsCacheEntry(response, SystemClock.elapsedRealtime() + 180000));
+        if (response != null && cacheKey != null && response.length > 12 && (response[3] & 0x0F) == 0) {
+            long ttlMs = dnsResponseTtlMs(response);
+            mDnsCache.put(cacheKey, new DnsCacheEntry(response, SystemClock.elapsedRealtime() + ttlMs));
         }
 
         return response;
+    }
+
+    /**
+     * Key on the DNS question (QNAME + QTYPE + QCLASS) instead of the whole
+     * datagram: EDNS0 padding and varying flags would otherwise defeat caching.
+     */
+    private static String dnsCacheKey(byte[] query) {
+        if (query == null || query.length < 17) return null;
+        int pos = 12;
+        for (int hops = 0; hops < 128 && pos < query.length; hops++) {
+            int len = query[pos] & 0xFF;
+            if (len == 0) {
+                int end = pos + 5; // terminating zero + QTYPE + QCLASS
+                if (end > query.length) return null;
+                return android.util.Base64.encodeToString(query, 12, end - 12, android.util.Base64.NO_WRAP);
+            }
+            if ((len & 0xC0) != 0) return null; // compressed names are not expected in queries
+            pos += 1 + len;
+        }
+        return null;
+    }
+
+    /** Returns the smallest answer TTL, clamped to 30s..180s; 0 means "do not cache". */
+    private static long dnsResponseTtlMs(byte[] response) {
+        try {
+            int questions = ((response[4] & 0xFF) << 8) | (response[5] & 0xFF);
+            int answers = ((response[6] & 0xFF) << 8) | (response[7] & 0xFF);
+            if (answers <= 0) return 0;
+
+            int pos = 12;
+            for (int i = 0; i < questions; i++) {
+                pos = skipDnsName(response, pos);
+                if (pos < 0 || pos + 4 > response.length) return 0;
+                pos += 4;
+            }
+
+            long minTtl = Long.MAX_VALUE;
+            for (int i = 0; i < answers; i++) {
+                pos = skipDnsName(response, pos);
+                if (pos < 0 || pos + 10 > response.length) return 0;
+                long ttl = ((long) (response[pos + 4] & 0xFF) << 24)
+                        | ((long) (response[pos + 5] & 0xFF) << 16)
+                        | ((long) (response[pos + 6] & 0xFF) << 8)
+                        | (long) (response[pos + 7] & 0xFF);
+                if (ttl > 0 && ttl < minTtl) minTtl = ttl;
+                int rdLength = ((response[pos + 8] & 0xFF) << 8) | (response[pos + 9] & 0xFF);
+                pos += 10 + rdLength;
+                if (pos > response.length) return 0;
+            }
+            if (minTtl == Long.MAX_VALUE) return 0;
+            long clamped = Math.max(30, Math.min(minTtl, 180));
+            return clamped * 1000L;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private static int skipDnsName(byte[] msg, int pos) {
+        for (int hops = 0; hops < 128; hops++) {
+            if (pos < 0 || pos >= msg.length) return -1;
+            int len = msg[pos] & 0xFF;
+            if ((len & 0xC0) == 0xC0) {
+                return (pos + 2 <= msg.length) ? pos + 2 : -1;
+            }
+            if (len == 0) return pos + 1;
+            pos += 1 + len;
+        }
+        return -1;
     }
 
     private byte[] resolveUdp(byte[] query) {
@@ -493,9 +603,13 @@ public class BeeVpnService extends VpnService {
             if (mSocket != null && !mSocket.isClosed()) return;
 
             mRawSocket = new Socket();
+            // Protect before connecting: once the socket is bound to a route,
+            // protect() can no longer reliably exclude it from the VPN tunnel.
+            if (!BeeVpnService.this.protect(mRawSocket)) {
+                LogManager.log("WARN", "Could not exempt the DNS-over-TLS socket from the VPN route.");
+            }
             mRawSocket.connect(new InetSocketAddress(DOT_SERVER, DOT_PORT), DOT_CONNECT_TIMEOUT_MS);
             mRawSocket.setKeepAlive(true);
-            protect(mRawSocket);
 
             SSLSocketFactory factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
             SSLSocket socket = (SSLSocket) factory.createSocket(
@@ -664,17 +778,36 @@ public class BeeVpnService extends VpnService {
             updateNotification("BeeVPN Connecting", "Connecting to Psiphon network...");
             broadcastStatus(false, true, mLastStatusMsg);
 
-            // Connect timeout watchdog (75s)
+            // Connect timeout watchdog. 45s is generous relative to the core's
+            // 20s EstablishTunnelTimeoutSeconds while still failing fast for users.
             if (mConnectTimeoutRunnable != null) {
                 mHandler.removeCallbacks(mConnectTimeoutRunnable);
             }
             mConnectTimeoutRunnable = () -> {
-                if (sIsConnecting && !sIsRunning) {
-                    LogManager.log("WARN", "Connection attempt timed out after 75s. Resetting.");
+                if (!sIsConnecting || sIsRunning) return;
+
+                SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+                boolean fastProfile = prefs.getBoolean(PREF_FAST_PROTOCOLS, true);
+                if (fastProfile && !mCompatibilityFallbackUsed) {
+                    mCompatibilityFallbackUsed = true;
+                    LogManager.log("WARN", "Fast profile did not establish in 45s; retrying once with Compatible protocols.");
+                    prefs.edit().putBoolean(PREF_FAST_PROTOCOLS, false).apply();
                     stopVpn();
+                    Intent retry = new Intent(this, BeeVpnService.class);
+                    retry.setAction(ACTION_CONNECT);
+                    retry.putExtra(EXTRA_MODE, MODE_PSIPHON);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(retry);
+                    } else {
+                        startService(retry);
+                    }
+                    return;
                 }
+
+                LogManager.log("WARN", "Connection attempt timed out after 45s. Resetting.");
+                stopVpn();
             };
-            mHandler.postDelayed(mConnectTimeoutRunnable, 75000);
+            mHandler.postDelayed(mConnectTimeoutRunnable, 45000);
 
             mPsiphonTunnel = PsiphonTunnel.newPsiphonTunnel(new PsiphonTunnel.HostService() {
                 @Override
@@ -1046,8 +1179,9 @@ public class BeeVpnService extends VpnService {
             public void run() {
                 if (!sIsRunning && !sIsConnecting) return;
 
-                // Live latency check every 5s while connected
-                if (sIsRunning && System.currentTimeMillis() - mLastLatencyCheck > 5000) {
+                // Live latency check every 10s. Each probe opens a tunneled TCP
+                // connection, so checking every 5s needlessly skewed throughput.
+                if (sIsRunning && System.currentTimeMillis() - mLastLatencyCheck > 10000) {
                     mLastLatencyCheck = System.currentTimeMillis();
                     final int mode = sCurrentMode;
                     final int socks = mSocksPort;
@@ -1092,7 +1226,7 @@ public class BeeVpnService extends VpnService {
 
                 broadcastStatus(sIsRunning, sIsConnecting, mLastStatusMsg);
                 if (sIsRunning) {
-                    String prefix = sCurrentMode == MODE_PSIPHON ? "Protected" : "DNS Active";
+                    String prefix = sCurrentMode == MODE_PSIPHON ? "Protected" : "DNS Only";
                     String stats = prefix + " • ↓ " + formatBytes(mRxBytes.get()) + " (" + formatSpeed(mRxSpeedBps) + ")";
                     updateNotification("BeeVPN Connected", stats);
                 }
@@ -1242,6 +1376,8 @@ public class BeeVpnService extends VpnService {
     @Override
     public void onRevoke() {
         LogManager.log("VPN", "VPN permission revoked by system or user.");
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(PREF_SHOULD_CONNECT, false).apply();
         stopVpn();
         super.onRevoke();
     }

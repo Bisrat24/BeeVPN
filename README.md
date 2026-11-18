@@ -4,6 +4,18 @@
 
 Designed for speed, resilience against deep-packet inspection (DPI), and modern user ergonomics, BeeVPN provides both full-device tunneling and granular split-tunnel application routing.
 
+> **Current release: v1.7.0** — see [What's new in v1.7.0](#-whats-new-in-v170) and the [CHANGELOG](CHANGELOG.md).
+
+---
+
+## 🆕 What's new in v1.7.0
+
+- **Privacy fix:** DNS-only mode now captures resolvers hardcoded inside apps (1.1.1.1, 8.8.8.8 and IPv6 equivalents) instead of letting those queries go direct.
+- **Reliability:** failed connections now fall back from the Fast (OSSH/TLS-OSSH) profile to Compatible protocols automatically after 45 s, once per attempt.
+- **Honest labeling:** Cloudflare DNS mode is clearly shown as **DNS only** — it does not hide your IP or tunnel general traffic.
+- **Sturdier service lifecycle:** explicit disconnects survive Android service restarts; the Quick Settings tile reflects live state.
+- **Build tooling:** location-independent Android build script with optional release signing and version read from the manifest.
+
 ---
 
 ## ⚡ Key Highlights & Speed Optimizations
@@ -13,6 +25,8 @@ Designed for speed, resilience against deep-packet inspection (DPI), and modern 
 - **Sub-Millisecond In-Memory DNS Caching (LRU):** Answers repeat domain lookups locally in `<0.5 ms`, slashing web browsing latency.
 - **TCP MSS Clamping (1360):** Enforces optimal MTU/MSS sizes on Wintun and tun2socks to eliminate IP packet fragmentation on cellular (4G/5G) and broadband networks.
 - **Live Speedometer:** Displays real-time download and upload transfer rates (`↓ MB/s`, `↑ KB/s`) alongside cumulative session bandwidth and duration.
+- **Adaptive Protocol Fallback:** A stalled Fast-profile connection automatically retries once with Compatible protocols after 45 s; the change is logged and persisted.
+- **TTL-Aware DNS Caching:** Cached answers honour the record's TTL (30–180 s window) and are keyed by question only, so EDNS0 variation does not defeat the cache.
 - **Color-Graded Latency Monitor:** Dynamic live ping indicator (`● Fast <90ms`, `● Good <190ms`, `● Slow`).
 - **HibernatorX-Style Split Tunneling (Android):** 3-mode kernel packet filter (*Route All*, *Tunnel Only Selected*, *Bypass Selected*) with categorical app tabs (*User*, *System*, *Selected*, *All*).
 - **Windows Wintun Kernel Driver:** Clean, full-device L3 TAP tunneling with automatic fallback to Windows system proxy.
@@ -42,8 +56,9 @@ Psiphon/
 │   ├── WintunTunnelManager.cs  # Wintun adapter driver & routing controller
 │   └── SplitTunnelManager.cs   # App proxy routing & persistence
 ├── BeeVPN-Windows/             # Standalone Windows Release Distribution
-├── build_beevpn.ps1            # Android automated build, zipalign & signing script
+├── build_beevpn.ps1            # Android build, zipalign & signing (debug or release)
 ├── CHANGELOG.md                # Detailed release notes and version history
+├── SECURITY.md                 # Trust model, release signing, known limitations
 └── README.md                   # This documentation
 ```
 
@@ -55,11 +70,18 @@ Psiphon/
 
 **Prerequisites:** PowerShell on Windows with bundled local tools in `tools/` (AAPT2, ECJ, D8, Uber-APK-Signer, Java JRE).
 
-Run the automated build script:
+Run the automated build script (works from any checkout location — paths are derived from the script, and the version is read from `AndroidManifest.xml`):
 ```powershell
-powershell -ExecutionPolicy Bypass -File "build_beevpn.ps1"
+powershell -ExecutionPolicy Bypass -File ".\build_beevpn.ps1"
 ```
-The output signed APK will be generated at `./BeeVpn.apk`.
+The output signed APK will be generated at `./BeeVpn.apk`. By default it is signed with the local Android **debug** key — suitable for development only.
+
+For a distributable build, supply a release keystore (arguments or environment variables):
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\build_beevpn.ps1" -Release `
+    -Keystore "C:\secure\beevpn.jks" -StorePass "<password>" -KeyAlias "beevpn"
+```
+Equivalent environment variables: `BEEVPN_KEYSTORE`, `BEEVPN_STOREPASS`, `BEEVPN_KEYALIAS`. Keep these secrets out of the repository.
 
 ### Windows (`BeeVPN.exe`)
 
@@ -69,7 +91,19 @@ Build the Release binary:
 ```powershell
 dotnet build beevpn_windows/BeeVpnWindows.csproj -c Release
 ```
-The compiled single-executable and dependencies will be built to `beevpn_windows/bin/Release/net9.0-windows/`.
+The compiled single-executable and dependencies will be built to `beevpn_windows/bin/Release/net9.0-windows/`. The `Version` property in `BeeVpnWindows.csproj` is the single source of truth for the Windows build and matches the Android manifest.
+
+---
+
+## 🔐 Security Notes & Limitations
+
+BeeVPN is a circumvention client, not an anonymity tool. Please read [SECURITY.md](SECURITY.md) before relying on it in a high-risk environment. In particular:
+
+- **Cloudflare DNS mode is DNS-only.** It encrypts DNS queries but leaves your IP address and all other traffic direct. The UI labels this mode `DNS ONLY` deliberately. Use Psiphon mode for actual tunneling.
+- **Full tunneling on Windows requires Administrator.** Without elevation the app falls back to the Windows system proxy, and apps that ignore proxy settings are not tunneled.
+- **UDP is limited.** The tunneled path supports DNS over TCP/DoT; other UDP (QUIC/WebRTC) is dropped so it cannot leak outside the tunnel. Some apps fall back to TCP more slowly than others.
+- **Split tunneling is best-effort on Windows.** The desktop "split tunnel" launches selected apps with proxy settings or environment variables; it is not kernel-level per-app enforcement.
+- **Logs stay local.** The in-app consoles are in-memory only and are never uploaded by BeeVPN itself. Be careful when copying them into third-party tools.
 
 ---
 

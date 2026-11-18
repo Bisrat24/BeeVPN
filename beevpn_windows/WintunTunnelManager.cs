@@ -553,9 +553,30 @@ namespace BeeVPN
                 _physicalGateway = "";
             }
 
+            // This value is later interpolated into netsh script files. Reject
+            // quotes, newlines and other unusual characters instead of trying to
+            // escape an attacker-controlled adapter name.
+            if (!IsSafeAdapterAlias(_physicalAlias))
+            {
+                Log("TUN", "ERROR: physical adapter name contains unsupported characters.");
+                return false;
+            }
+
             Log("TUN", $"Physical egress: {_physicalAlias}" +
                 (string.IsNullOrEmpty(_physicalGateway) ? " (on-link)" : $" via {_physicalGateway}"));
             return !string.IsNullOrWhiteSpace(_physicalAlias);
+        }
+
+        private static bool IsSafeAdapterAlias(string alias)
+        {
+            if (string.IsNullOrWhiteSpace(alias) || alias.Length > 64) return false;
+            foreach (char c in alias)
+            {
+                if (char.IsLetterOrDigit(c) || c == ' ' || c == '.' || c == '-' ||
+                    c == '_' || c == '#' || c == '(' || c == ')') continue;
+                return false;
+            }
+            return true;
         }
 
         private void AddBypassRoutes(IEnumerable<string> ips)
